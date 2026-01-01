@@ -7,9 +7,10 @@ import os
 import tempfile
 from contextlib import asynccontextmanager
 
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.interval import IntervalTrigger
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
-from fastapi.responses import JSONResponse
 
 load_dotenv(override=True)
 
@@ -27,6 +28,7 @@ from agents import Runner
 MAX_TURNS = 250
 DOCS_DIR = os.getenv("DOCS_DIR", "./data")
 LINEAR_WEBHOOK_SECRET = os.getenv("LINEAR_WEBHOOK_SECRET")
+SYNC_INTERVAL_HOURS = int(os.getenv("SYNC_INTERVAL_HOURS", "1"))
 
 # Track recently processed issues to prevent infinite loops
 # Key: issue_id, Value: timestamp
@@ -36,13 +38,53 @@ PROCESS_COOLDOWN_SECONDS = 300  # 5 minutes
 # Marker we add to enhanced descriptions
 ENHANCEMENT_MARKER = "<!-- enhanced-by-linear-enhancer -->"
 
+# Scheduler instance
+scheduler = AsyncIOScheduler()
+
+
+async def scheduled_sync():
+    """Run periodic sync of data sources."""
+    print(f"\n{'='*60}", flush=True)
+    print("⏰ Scheduled sync starting...", flush=True)
+    print(f"{'='*60}\n", flush=True)
+    try:
+        await sync_all_async(DOCS_DIR)
+        print("✅ Scheduled sync complete!", flush=True)
+    except Exception as e:
+        print(f"❌ Scheduled sync failed: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """App lifespan handler."""
-    print("🚀 Linear Enhancer API starting...")
+    print("🚀 Linear Enhancer API starting...", flush=True)
+    
+    # Run initial sync on boot
+    print("📥 Running initial sync on boot...", flush=True)
+    try:
+        await sync_all_async(DOCS_DIR)
+        print("✅ Initial sync complete!", flush=True)
+    except Exception as e:
+        print(f"⚠️ Initial sync failed: {e}", flush=True)
+    
+    # Start the scheduler for periodic syncs
+    scheduler.add_job(
+        scheduled_sync,
+        trigger=IntervalTrigger(hours=SYNC_INTERVAL_HOURS),
+        id="periodic_sync",
+        name=f"Sync every {SYNC_INTERVAL_HOURS} hours",
+        replace_existing=True,
+    )
+    scheduler.start()
+    print(f"⏰ Scheduler started: sync every {SYNC_INTERVAL_HOURS} hours", flush=True)
+    
     yield
-    print("👋 Shutting down...")
+    
+    # Shutdown scheduler
+    scheduler.shutdown()
+    print("👋 Shutting down...", flush=True)
 
 
 app = FastAPI(
