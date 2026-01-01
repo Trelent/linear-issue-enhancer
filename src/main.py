@@ -155,12 +155,20 @@ def main():
     issue_parser.add_argument("--gdrive-creds", help="Path to Google Drive credentials JSON (or set GDRIVE_CREDS)")
     issue_parser.add_argument("--sync-max-age", type=int, default=30, help="Max age in minutes before re-syncing (default: 30)")
 
+    # Serve command (API mode)
+    serve_parser = subparsers.add_parser("serve", help="Run API server for Linear webhooks")
+    serve_parser.add_argument("--host", default="0.0.0.0", help="Host to bind to (default: 0.0.0.0)")
+    serve_parser.add_argument("--port", "-p", type=int, default=8000, help="Port to listen on (default: 8000)")
+
     args = parser.parse_args()
 
     if args.command == "sync":
         cmd_sync(args)
     elif args.command == "issue":
         asyncio.run(cmd_issue(args))
+    elif args.command == "serve":
+        from src.api import run_server
+        run_server(host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

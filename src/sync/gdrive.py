@@ -338,8 +338,28 @@ def _format_doc_markdown(doc: dict, content: str) -> str:
     return "\n".join(lines)
 
 
-def _load_credentials(creds_path: str) -> Credentials | None:
-    """Load credentials from a service account JSON file."""
+def _load_credentials(creds_path: str | None) -> Credentials | None:
+    """Load credentials from file path or GDRIVE_CREDS_BASE64 env var."""
+    import base64
+    import os
+    
+    # Try base64-encoded JSON from environment first (for deployed environments)
+    creds_base64 = os.getenv("GDRIVE_CREDS_BASE64")
+    if creds_base64:
+        try:
+            creds_json = base64.b64decode(creds_base64).decode("utf-8")
+            creds_data = json.loads(creds_json)
+            if creds_data.get("type") == "service_account":
+                return service_account.Credentials.from_service_account_info(creds_data, scopes=SCOPES)
+            return Credentials.from_authorized_user_info(creds_data, SCOPES)
+        except Exception as e:
+            print(f"  ✗ GDrive: Failed to load credentials from GDRIVE_CREDS_BASE64: {e}")
+            return None
+    
+    # Fall back to file path
+    if not creds_path:
+        return None
+        
     path = Path(creds_path)
     if not path.exists():
         print(f"  ✗ GDrive: Credentials file not found: {creds_path}")
