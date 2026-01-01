@@ -65,7 +65,7 @@ async def write_issue(prompt: str, context: str, code_analysis: str) -> str:
     """Write the final Linear issue."""
     result = await Runner.run(
         issue_writer,
-        f"""Write a comprehensive Linear issue based on:
+        f"""Write a Linear issue based on:
 
 ## Original Request
 {prompt}
@@ -76,7 +76,19 @@ async def write_issue(prompt: str, context: str, code_analysis: str) -> str:
 ## Codebase Analysis
 {code_analysis}
 
-Create a well-structured, actionable issue.""",
+---
+
+Write a clear issue description. Include:
+- Problem statement: what needs to be done
+- Context: relevant background from the research above  
+- Technical details: file paths, code references, error messages
+- References: ONLY real URLs found in the research (PRs, docs, etc.)
+
+IMPORTANT:
+- Do NOT suggest how to implement or approach the solution
+- Do NOT include a "Suggested Approach" or "Implementation" section
+- Do NOT make up URLs - only include links found in the research
+- Just DESCRIBE the problem, don't PLAN the solution""",
         max_turns=MAX_TURNS,
     )
     return str(result.final_output)

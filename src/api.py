@@ -265,15 +265,22 @@ async def _write_enhanced_description(
 ## Codebase Analysis
 {code_analysis}
 
-Write a comprehensive, well-structured issue description. Include:
-- Clear problem statement
-- Relevant context from communications
-- Technical details from code analysis  
-- Acceptance criteria if determinable
-- Any relevant file paths or code references
+---
 
-Do NOT include a title - just write the description body.
-Format using Markdown.""",
+Write a clear issue description. Include:
+- Problem statement: what needs to be done
+- Context: relevant background from the research above
+- Technical details: file paths, code references, error messages
+- References: ONLY real URLs found in the research (PRs, docs, etc.)
+
+IMPORTANT:
+- Do NOT suggest how to implement or approach the solution
+- Do NOT include a "Suggested Approach" or "Implementation" section
+- Do NOT make up URLs - only include links found in the research
+- Do NOT include acceptance criteria unless explicitly stated in context
+- Just DESCRIBE the problem, don't PLAN the solution
+
+Format: Markdown. No title needed - just the description body.""",
         max_turns=MAX_TURNS,
     )
     return str(result.final_output)
