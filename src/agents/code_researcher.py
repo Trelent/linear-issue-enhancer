@@ -1,6 +1,6 @@
 from agents import Agent
-from agents.extensions.models.litellm_model import LitellmModel
 
+from src.agents.model import get_model
 from src.tools import (
     grep_files,
     read_file_content,
@@ -13,11 +13,9 @@ from src.tools import (
     get_pr_details,
 )
 
-MODEL = LitellmModel(model="anthropic/claude-sonnet-4-20250514")
-
 code_researcher = Agent(
     name="CodeResearcher",
-    model=MODEL,
+    model=get_model(),
     instructions="""You analyze GitHub repositories to understand their structure and 
 find code relevant to an issue.
 

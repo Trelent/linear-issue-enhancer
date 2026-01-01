@@ -76,8 +76,10 @@ async def sync_slack(
     users_lock = asyncio.Lock()
     rate_limiter = RateLimiter(SLACK_RATE_LIMIT, SLACK_BURST_CAPACITY)
 
-    channels = await _get_channels_async(client, rate_limiter)
-    print(f"  📨 Slack: Found {len(channels)} channels")
+    channels = await _get_channels_async(client, rate_limiter, users, users_lock)
+    dm_count = sum(1 for c in channels if c.get("is_im") or c.get("is_mpim"))
+    channel_count = len(channels) - dm_count
+    print(f"  📨 Slack: Found {channel_count} channels, {dm_count} DMs")
 
     semaphore = asyncio.Semaphore(SLACK_CONCURRENT_CHANNELS)
     print_lock = asyncio.Lock()
@@ -96,10 +98,11 @@ async def sync_slack(
             # Log progress with lock to prevent interleaving
             async with print_lock:
                 progress["done"] += 1
+                prefix = "💬" if channel.get("is_im") or channel.get("is_mpim") else "#"
                 if msg_count > 0:
-                    print(f"     [{progress['done']}/{progress['total']}] #{channel_name}: +{msg_count} msgs, +{reply_count} replies")
+                    print(f"     [{progress['done']}/{progress['total']}] {prefix}{channel_name}: +{msg_count} msgs, +{reply_count} replies")
                 else:
-                    print(f"     [{progress['done']}/{progress['total']}] #{channel_name}: (no new)")
+                    print(f"     [{progress['done']}/{progress['total']}] {prefix}{channel_name}: (no new)")
 
             return channel_id, channel_state, msg_count, reply_count, channel_name
 
@@ -123,6 +126,15 @@ async def sync_slack(
     return new_state
 
 
+def _get_conversation_name(channel: dict) -> str:
+    """Get the display name for a channel or DM."""
+    if channel.get("is_im"):
+        return f"dm-{channel.get('_dm_user_name', channel.get('user', 'unknown'))}"
+    if channel.get("is_mpim"):
+        return channel.get("name", "group-dm").replace(" ", "-")
+    return channel["name"]
+
+
 async def _sync_channel(
     client: WebClient,
     channel: dict,
@@ -132,9 +144,10 @@ async def _sync_channel(
     output_dir: Path,
     rate_limiter: RateLimiter,
 ) -> tuple[str, dict, int, int, str | None]:
-    """Sync a single channel. Returns (channel_id, state_entry, msg_count, reply_count, channel_name)."""
+    """Sync a single channel/DM. Returns (channel_id, state_entry, msg_count, reply_count, channel_name)."""
     channel_id = channel["id"]
-    channel_name = channel["name"]
+    channel_name = _get_conversation_name(channel)
+    is_dm = channel.get("is_im") or channel.get("is_mpim")
 
     last_ts = state.get(channel_id, {}).get("last_ts", "0")
     messages, latest_ts = await _get_messages_with_threads_async(
@@ -145,7 +158,7 @@ async def _sync_channel(
         return channel_id, state.get(channel_id, {"last_ts": "0", "name": channel_name}), 0, 0, channel_name
 
     md_path = output_dir / f"{channel_name}.md"
-    await _run_in_executor(_append_messages_to_md, md_path, channel_name, messages)
+    await _run_in_executor(_append_messages_to_md, md_path, channel_name, messages, is_dm)
 
     reply_count = sum(len(m.get("replies", [])) for m in messages)
     return channel_id, {"last_ts": latest_ts, "name": channel_name}, len(messages), reply_count, channel_name
@@ -163,14 +176,31 @@ def _save_user_cache(output_dir: Path, users: dict):
     cache_path.write_text(json.dumps(users, indent=2))
 
 
-async def _get_channels_async(client: WebClient, rate_limiter: RateLimiter) -> list:
-    """Get list of channels the bot has access to."""
+async def _get_channels_async(
+    client: WebClient, rate_limiter: RateLimiter, users: dict, users_lock: asyncio.Lock
+) -> list:
+    """Get list of channels and DMs the bot has access to."""
     try:
         await rate_limiter.acquire()
         result = await _run_in_executor(
-            lambda: client.conversations_list(types="public_channel,private_channel", limit=999)
+            lambda: client.conversations_list(types="public_channel,private_channel,im,mpim", limit=999)
         )
-        return result.get("channels", [])
+        conversations = result.get("channels", [])
+
+        # Resolve DM user names in parallel
+        dm_tasks = []
+        dm_indices = []
+        for i, conv in enumerate(conversations):
+            if conv.get("is_im") and conv.get("user"):
+                dm_tasks.append(_get_user_info_async(client, conv["user"], users, users_lock, rate_limiter))
+                dm_indices.append(i)
+
+        if dm_tasks:
+            dm_results = await asyncio.gather(*dm_tasks)
+            for idx, user_info in zip(dm_indices, dm_results):
+                conversations[idx]["_dm_user_name"] = user_info["name"]
+
+        return conversations
     except SlackApiError as e:
         print(f"  ✗ Slack API error listing channels: {e}")
         return []
@@ -322,9 +352,10 @@ def _format_timestamp(ts: str) -> str:
     return dt.strftime("%Y-%m-%d %H:%M")
 
 
-def _append_messages_to_md(path: Path, channel_name: str, messages: list):
+def _append_messages_to_md(path: Path, channel_name: str, messages: list, is_dm: bool = False):
     """Append messages to a markdown file with thread structure."""
-    existing = path.read_text() if path.exists() else f"# #{channel_name}\n\n"
+    prefix = "💬 DM with" if is_dm else "#"
+    existing = path.read_text() if path.exists() else f"# {prefix} {channel_name.replace('dm-', '') if is_dm else channel_name}\n\n"
 
     lines = []
     for msg in sorted(messages, key=lambda m: float(m["ts"])):

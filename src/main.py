@@ -4,11 +4,19 @@ import tempfile
 
 from dotenv import load_dotenv
 from agents import Runner
+from agents.tracing import add_trace_processor
 
-load_dotenv()
+load_dotenv(override=True)
+
+# Add console tracer for real-time logging
+from src.tracing import ConsoleTracer
+add_trace_processor(ConsoleTracer())
 
 from src.agents import context_researcher, code_researcher, issue_writer
 from src.sync import sync_all, sync_all_async, needs_sync
+
+
+MAX_TURNS = 250
 
 
 async def research_context(prompt: str, docs_dir: str) -> str:
@@ -16,6 +24,7 @@ async def research_context(prompt: str, docs_dir: str) -> str:
     result = await Runner.run(
         context_researcher,
         f"Find all context relevant to this issue:\n\n{prompt}\n\nSearch in: {docs_dir}",
+        max_turns=MAX_TURNS,
     )
     return str(result.final_output)
 
@@ -47,6 +56,7 @@ then clone it to: `{repo_dir}`"""
 {clone_instruction}
 
 Analyze the codebase and find all relevant code and context.""",
+        max_turns=MAX_TURNS,
     )
     return str(result.final_output)
 
@@ -67,6 +77,7 @@ async def write_issue(prompt: str, context: str, code_analysis: str) -> str:
 {code_analysis}
 
 Create a well-structured, actionable issue.""",
+        max_turns=MAX_TURNS,
     )
     return str(result.final_output)
 
@@ -106,7 +117,7 @@ def cmd_sync(args):
 
 async def cmd_issue(args):
     """Run issue creation command."""
-    print("🔍 Researching context and codebase...")
+    print("🔍 Starting issue research...\n")
     issue = await create_issue(
         prompt=args.prompt,
         docs_dir=args.docs,
@@ -130,22 +141,16 @@ def main():
 
     # Sync command
     sync_parser = subparsers.add_parser("sync", help="Sync data from Slack and Google Drive")
-    sync_parser.add_argument("--docs", "-d", required=True, help="Directory to store synced markdown files")
+    sync_parser.add_argument("--docs", "-d", default="./data", help="Directory to store synced markdown files (default: ./data)")
     sync_parser.add_argument("--slack-token", help="Slack bot token (or set SLACK_TOKEN env var)")
     sync_parser.add_argument("--gdrive-creds", help="Path to Google Drive credentials JSON (or set GDRIVE_CREDS)")
 
     # Issue command
     issue_parser = subparsers.add_parser("issue", help="Create a Linear issue")
     issue_parser.add_argument("--prompt", "-p", required=True, help="Issue prompt/description")
-    issue_parser.add_argument(
-        "--repo", "-r",
-        help="GitHub repository (owner/repo format or URL). If omitted, agent will discover repos."
-    )
-    issue_parser.add_argument(
-        "--branch", "-b",
-        help="Specific branch to analyze (default: repo's default branch)"
-    )
-    issue_parser.add_argument("--docs", "-d", required=True, help="Directory with markdown context files")
+    issue_parser.add_argument("--repo", "-r", help="GitHub repository (owner/repo). Omit to auto-discover.")
+    issue_parser.add_argument("--branch", "-b", help="Branch to analyze (default: repo's default branch)")
+    issue_parser.add_argument("--docs", "-d", default="./data", help="Directory with context files (default: ./data)")
     issue_parser.add_argument("--slack-token", help="Slack bot token (or set SLACK_TOKEN env var)")
     issue_parser.add_argument("--gdrive-creds", help="Path to Google Drive credentials JSON (or set GDRIVE_CREDS)")
     issue_parser.add_argument("--sync-max-age", type=int, default=30, help="Max age in minutes before re-syncing (default: 30)")

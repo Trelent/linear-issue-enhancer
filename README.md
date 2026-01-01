@@ -11,13 +11,11 @@ AI-powered issue creation from context across Slack, Google Drive, and GitHub.
 uv run python -m src.main issue \
   -p "Fix the authentication timeout issue" \
   -r Trelent/backend \
-  -b develop \
-  -d ./data
+  -b develop
 
 # Let the agent discover the relevant repo from context
 uv run python -m src.main issue \
-  -p "Fix the rate limiting bug we discussed in Slack" \
-  -d ./data
+  -p "Fix the rate limiting bug we discussed in Slack"
 ```
 
 | Flag | Description |
@@ -25,14 +23,14 @@ uv run python -m src.main issue \
 | `-p, --prompt` | Issue description (required) |
 | `-r, --repo` | GitHub repo (`owner/repo`). Omit to auto-discover. |
 | `-b, --branch` | Branch to analyze (default: repo's default) |
-| `-d, --docs` | Directory with synced context (required) |
+| `-d, --docs` | Directory with synced context (default: `./data`) |
 
 ### Sync Context
 
 Pull latest Slack messages and Google Drive docs:
 
 ```bash
-uv run python -m src.main sync -d ./data
+uv run python -m src.main sync
 ```
 
 Syncs incrementally — only fetches new messages and modified docs.

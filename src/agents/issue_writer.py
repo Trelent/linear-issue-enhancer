@@ -1,11 +1,10 @@
 from agents import Agent
-from agents.extensions.models.litellm_model import LitellmModel
 
-MODEL = LitellmModel(model="anthropic/claude-sonnet-4-20250514")
+from src.agents.model import get_model
 
 issue_writer = Agent(
     name="IssueWriter",
-    model=MODEL,
+    model=get_model(),
     instructions="""You write comprehensive Linear issues based on research context.
 
 Given:
@@ -22,4 +21,3 @@ Write a well-structured issue with:
 
 Make it actionable and thorough.""",
 )
-

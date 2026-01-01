@@ -20,3 +20,4 @@ def is_internal_email(email: str) -> bool:
 #
 # For user tokens, create an app at api.slack.com/apps with these User Token Scopes:
 #   channels:history, channels:read, groups:history, groups:read, users:read, users:read.email
+#   im:history, im:read (for 1:1 DMs), mpim:history, mpim:read (for group DMs)

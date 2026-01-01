@@ -1,13 +1,11 @@
 from agents import Agent
-from agents.extensions.models.litellm_model import LitellmModel
 
+from src.agents.model import get_model
 from src.tools import grep_files, read_file_content, list_directory
-
-MODEL = LitellmModel(model="anthropic/claude-sonnet-4-20250514")
 
 context_researcher = Agent(
     name="ContextResearcher",
-    model=MODEL,
+    model=get_model(),
     instructions="""You research context from markdown files representing Slack channels, 
 Google Drive documents, and other sources. Given an issue prompt, search through the 
 provided directory to find all relevant context.
@@ -21,4 +19,3 @@ Strategy:
 Be thorough - loop through multiple grep searches to find all relevant information.""",
     tools=[grep_files, read_file_content, list_directory],
 )
-
