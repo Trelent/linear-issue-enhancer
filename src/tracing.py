@@ -1,6 +1,7 @@
 """Real-time logging for agent tool calls."""
 
 import json
+import os
 from datetime import datetime
 from agents.tracing import TracingProcessor, Span
 
@@ -23,8 +24,10 @@ class ConsoleTracer(TracingProcessor):
 
     def _log(self, icon: str, message: str, dim: bool = False, agent: str | None = None):
         timestamp = datetime.now().strftime("%H:%M:%S")
-        style = "\033[2m" if dim else ""
-        reset = "\033[0m" if dim else ""
+        # Skip ANSI codes in production (Docker/cloud) for cleaner logs
+        use_ansi = os.getenv("TERM") is not None
+        style = "\033[2m" if dim and use_ansi else ""
+        reset = "\033[0m" if dim and use_ansi else ""
         
         # Add agent label for clarity
         label = ""
@@ -32,7 +35,7 @@ class ConsoleTracer(TracingProcessor):
             short = self.AGENT_LABELS.get(agent, agent[:4].upper())
             label = f"[{short}] "
         
-        print(f"{style}[{timestamp}] {label}{icon} {message}{reset}")
+        print(f"{style}[{timestamp}] {label}{icon} {message}{reset}", flush=True)
 
     def on_span_start(self, span: Span) -> None:
         span_data = span.span_data

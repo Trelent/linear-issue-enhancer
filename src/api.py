@@ -28,6 +28,14 @@ MAX_TURNS = 250
 DOCS_DIR = os.getenv("DOCS_DIR", "./data")
 LINEAR_WEBHOOK_SECRET = os.getenv("LINEAR_WEBHOOK_SECRET")
 
+# Track recently processed issues to prevent infinite loops
+# Key: issue_id, Value: timestamp
+_recently_processed: dict[str, float] = {}
+PROCESS_COOLDOWN_SECONDS = 300  # 5 minutes
+
+# Marker we add to enhanced descriptions
+ENHANCEMENT_MARKER = "<!-- enhanced-by-linear-enhancer -->"
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -64,6 +72,25 @@ def _verify_signature(body: bytes, signature: str | None) -> bool:
     return hmac.compare_digest(expected, signature)
 
 
+def _was_recently_processed(issue_id: str) -> bool:
+    """Check if we recently processed this issue."""
+    import time
+    now = time.time()
+    
+    # Clean up old entries
+    expired = [k for k, v in _recently_processed.items() if now - v > PROCESS_COOLDOWN_SECONDS]
+    for k in expired:
+        del _recently_processed[k]
+    
+    return issue_id in _recently_processed
+
+
+def _mark_as_processed(issue_id: str):
+    """Mark an issue as recently processed."""
+    import time
+    _recently_processed[issue_id] = time.time()
+
+
 @app.post("/webhook/linear")
 async def linear_webhook(request: Request, background_tasks: BackgroundTasks):
     """Handle Linear webhook events."""
@@ -71,6 +98,7 @@ async def linear_webhook(request: Request, background_tasks: BackgroundTasks):
     signature = request.headers.get("linear-signature")
     
     if not _verify_signature(body, signature):
+        print("❌ Webhook signature verification failed", flush=True)
         raise HTTPException(status_code=401, detail="Invalid signature")
     
     payload = await request.json()
@@ -78,6 +106,8 @@ async def linear_webhook(request: Request, background_tasks: BackgroundTasks):
     action = payload.get("action")
     event_type = payload.get("type")
     data = payload.get("data", {})
+    
+    print(f"📨 Webhook received: {event_type}/{action}", flush=True)
     
     # Only process issue creation events
     if event_type != "Issue" or action != "create":
@@ -87,13 +117,28 @@ async def linear_webhook(request: Request, background_tasks: BackgroundTasks):
     if not issue_id:
         raise HTTPException(status_code=400, detail="Missing issue ID")
     
-    # Check if this looks like a stub issue (short/empty description)
     title = data.get("title", "")
     description = data.get("description") or ""
     
+    # Check if we already processed this issue recently (prevents loops)
+    if _was_recently_processed(issue_id):
+        print(f"⏭️ Skipping {issue_id}: recently processed", flush=True)
+        return {"status": "skipped", "reason": "Recently processed"}
+    
+    # Check if description already has our marker
+    if ENHANCEMENT_MARKER in description:
+        print(f"⏭️ Skipping {issue_id}: already enhanced", flush=True)
+        return {"status": "skipped", "reason": "Already enhanced"}
+    
     # Skip if description is already substantial (> 200 chars)
     if len(description) > 200:
+        print(f"⏭️ Skipping {issue_id}: already has substantial description", flush=True)
         return {"status": "skipped", "reason": "Issue already has substantial description"}
+    
+    # Mark as processing to prevent loops
+    _mark_as_processed(issue_id)
+    
+    print(f"✅ Queuing enhancement for: {title}", flush=True)
     
     # Queue enhancement in background
     background_tasks.add_task(enhance_issue, issue_id, title, description)
@@ -103,45 +148,64 @@ async def linear_webhook(request: Request, background_tasks: BackgroundTasks):
 
 async def enhance_issue(issue_id: str, title: str, existing_description: str):
     """Enhance an issue with AI-researched context."""
-    print(f"\n{'='*60}")
-    print(f"🔍 Enhancing issue: {title}")
-    print(f"{'='*60}\n")
+    print(f"\n{'='*60}", flush=True)
+    print(f"🔍 Enhancing issue: {title}", flush=True)
+    print(f"{'='*60}\n", flush=True)
     
-    # Build prompt from title and existing description
-    prompt = f"Issue: {title}"
-    if existing_description:
-        prompt += f"\n\nExisting notes:\n{existing_description}"
-    
-    # Sync data if needed
-    if needs_sync(DOCS_DIR, max_age_minutes=30):
-        print("📥 Syncing data sources...")
-        await sync_all_async(DOCS_DIR)
-    
-    # Research context and codebase in parallel
-    with tempfile.TemporaryDirectory() as work_dir:
-        context_result, code_result = await asyncio.gather(
-            _research_context(prompt),
-            _research_codebase(prompt, work_dir),
-            return_exceptions=True,
-        )
+    try:
+        # Build prompt from title and existing description
+        prompt = f"Issue: {title}"
+        if existing_description:
+            prompt += f"\n\nExisting notes:\n{existing_description}"
         
-        # Handle any errors
-        context = str(context_result) if not isinstance(context_result, Exception) else f"Error: {context_result}"
-        code_analysis = str(code_result) if not isinstance(code_result, Exception) else f"Error: {code_result}"
-    
-    # Generate enhanced description
-    enhanced = await _write_enhanced_description(title, existing_description, context, code_analysis)
-    
-    # Update the Linear issue
-    print(f"\n📝 Updating Linear issue...")
-    success = await update_issue_description(issue_id, enhanced)
-    
-    if success:
-        print(f"✅ Issue enhanced successfully!")
-        # Add a comment noting the enhancement
-        await add_comment(issue_id, "_This issue was automatically enhanced with context from Slack, Google Drive, and GitHub._")
-    else:
-        print(f"❌ Failed to update issue")
+        # Sync data if needed
+        if needs_sync(DOCS_DIR, max_age_minutes=30):
+            print("📥 Syncing data sources...", flush=True)
+            await sync_all_async(DOCS_DIR)
+        
+        # Research context and codebase in parallel
+        with tempfile.TemporaryDirectory() as work_dir:
+            print("🔬 Starting research (context + code)...", flush=True)
+            context_result, code_result = await asyncio.gather(
+                _research_context(prompt),
+                _research_codebase(prompt, work_dir),
+                return_exceptions=True,
+            )
+            
+            # Handle any errors with detailed logging
+            if isinstance(context_result, Exception):
+                print(f"⚠️ Context research error: {context_result}", flush=True)
+                context = f"Error researching context: {context_result}"
+            else:
+                context = str(context_result)
+                
+            if isinstance(code_result, Exception):
+                print(f"⚠️ Code research error: {code_result}", flush=True)
+                code_analysis = f"Error researching code: {code_result}"
+            else:
+                code_analysis = str(code_result)
+        
+        # Generate enhanced description
+        print("✍️ Writing enhanced description...", flush=True)
+        enhanced = await _write_enhanced_description(title, existing_description, context, code_analysis)
+        
+        # Add marker to prevent re-processing
+        enhanced_with_marker = f"{enhanced}\n\n{ENHANCEMENT_MARKER}"
+        
+        # Update the Linear issue
+        print(f"📝 Updating Linear issue...", flush=True)
+        success = await update_issue_description(issue_id, enhanced_with_marker)
+        
+        if success:
+            print(f"✅ Issue enhanced successfully!", flush=True)
+            await add_comment(issue_id, "_This issue was automatically enhanced with context from Slack, Google Drive, and GitHub._")
+        else:
+            print(f"❌ Failed to update issue via Linear API", flush=True)
+            
+    except Exception as e:
+        print(f"❌ Enhancement failed with error: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
 
 
 async def _research_context(prompt: str) -> str:

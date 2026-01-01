@@ -383,11 +383,20 @@ def clone_repo(repo: str, target_dir: str, branch: str = "") -> str:
         target_dir: The directory to clone into.
         branch: Specific branch to clone (default: repo's default branch).
     """
+    import os
+    
     if Path(target_dir).exists():
         shutil.rmtree(target_dir)
 
-    # Normalize repo to URL if it's in owner/repo format
-    repo_url = repo if repo.startswith("http") else f"https://github.com/{repo}"
+    # Normalize repo to URL, using GH_TOKEN for auth if available
+    gh_token = os.getenv("GH_TOKEN")
+    if repo.startswith("http"):
+        repo_url = repo
+    elif gh_token:
+        # Use token for private repo access
+        repo_url = f"https://{gh_token}@github.com/{repo}.git"
+    else:
+        repo_url = f"https://github.com/{repo}"
 
     cmd = ["git", "clone", "--depth", "1"]
     if branch:
@@ -396,7 +405,11 @@ def clone_repo(repo: str, target_dir: str, branch: str = "") -> str:
 
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
     if result.returncode != 0:
-        return f"## ❌ Clone Failed\n\n```\n{result.stderr.strip()}\n```"
+        # Redact token from error message if present
+        stderr = result.stderr.strip()
+        if gh_token:
+            stderr = stderr.replace(gh_token, "[REDACTED]")
+        return f"## ❌ Clone Failed\n\nRepository: `{repo}`\nBranch: `{branch or 'default'}`\n\n```\n{stderr}\n```\n\n_Hint: Check GH_TOKEN is set and has repo access._"
 
     # Get some info about what was cloned
     cloned_path = Path(target_dir)

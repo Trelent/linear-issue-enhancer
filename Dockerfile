@@ -28,6 +28,7 @@ RUN uv sync --frozen --no-dev
 RUN mkdir -p /data
 
 ENV DOCS_DIR=/data
+ENV PYTHONUNBUFFERED=1
 
 EXPOSE 8000
 
