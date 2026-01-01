@@ -20,19 +20,33 @@ async def research_context(prompt: str, docs_dir: str) -> str:
     return str(result.final_output)
 
 
-async def research_codebase(prompt: str, repo_url: str, work_dir: str) -> str:
+async def research_codebase(prompt: str, repo: str | None, branch: str | None, work_dir: str) -> str:
     """Research the codebase for relevant context."""
     repo_dir = os.path.join(work_dir, "repo")
+
+    if repo:
+        clone_instruction = f"""Clone the repository: `{repo}`
+Target directory: `{repo_dir}`"""
+        if branch:
+            clone_instruction += f"\nBranch: `{branch}`"
+    else:
+        clone_instruction = f"""No specific repository was provided. Use `list_github_repos` to discover 
+available repositories, then identify which one is most relevant to the issue.
+
+Once you've identified the repo, use `get_repo_info` to check its default branch,
+then clone it to: `{repo_dir}`"""
+
     result = await Runner.run(
         code_researcher,
-        f"""Analyze this repository for the following issue:
+        f"""Analyze the codebase for the following issue:
 
-Issue: {prompt}
+## Issue
+{prompt}
 
-First clone the repo: {repo_url}
-Clone to: {repo_dir}
+## Instructions
+{clone_instruction}
 
-Then analyze the codebase and find all relevant code and context.""",
+Analyze the codebase and find all relevant code and context.""",
     )
     return str(result.final_output)
 
@@ -59,14 +73,14 @@ Create a well-structured, actionable issue.""",
 
 async def create_issue(
     prompt: str,
-    repo_url: str,
     docs_dir: str,
+    repo: str | None = None,
+    branch: str | None = None,
     slack_token: str | None = None,
     gdrive_creds: str | None = None,
     sync_max_age: int = 30,
 ) -> str:
     """Main function to create a Linear issue from all sources."""
-    # Sync if needed (async to allow parallel sync of sources)
     if needs_sync(docs_dir, max_age_minutes=sync_max_age):
         print("📥 Syncing data from Slack and Google Drive...")
         await sync_all_async(docs_dir, slack_token=slack_token, gdrive_creds=gdrive_creds)
@@ -74,7 +88,7 @@ async def create_issue(
     with tempfile.TemporaryDirectory() as work_dir:
         context, code_analysis = await asyncio.gather(
             research_context(prompt, docs_dir),
-            research_codebase(prompt, repo_url, work_dir),
+            research_codebase(prompt, repo, branch, work_dir),
         )
         return await write_issue(prompt, context, code_analysis)
 
@@ -95,8 +109,9 @@ async def cmd_issue(args):
     print("🔍 Researching context and codebase...")
     issue = await create_issue(
         prompt=args.prompt,
-        repo_url=args.repo,
         docs_dir=args.docs,
+        repo=args.repo,
+        branch=args.branch,
         slack_token=os.getenv("SLACK_TOKEN") or args.slack_token,
         gdrive_creds=os.getenv("GDRIVE_CREDS") or args.gdrive_creds,
         sync_max_age=args.sync_max_age,
@@ -122,7 +137,14 @@ def main():
     # Issue command
     issue_parser = subparsers.add_parser("issue", help="Create a Linear issue")
     issue_parser.add_argument("--prompt", "-p", required=True, help="Issue prompt/description")
-    issue_parser.add_argument("--repo", "-r", required=True, help="GitHub repository URL")
+    issue_parser.add_argument(
+        "--repo", "-r",
+        help="GitHub repository (owner/repo format or URL). If omitted, agent will discover repos."
+    )
+    issue_parser.add_argument(
+        "--branch", "-b",
+        help="Specific branch to analyze (default: repo's default branch)"
+    )
     issue_parser.add_argument("--docs", "-d", required=True, help="Directory with markdown context files")
     issue_parser.add_argument("--slack-token", help="Slack bot token (or set SLACK_TOKEN env var)")
     issue_parser.add_argument("--gdrive-creds", help="Path to Google Drive credentials JSON (or set GDRIVE_CREDS)")
