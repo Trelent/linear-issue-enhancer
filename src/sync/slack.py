@@ -10,7 +10,7 @@ from datetime import datetime
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
-from src.sync.config import INTERNAL_DOMAIN
+from src.sync.config import is_internal_email
 
 USER_CACHE_FILE = "slack_users.json"
 
@@ -80,7 +80,7 @@ def _get_user_info(client: WebClient, user_id: str, users: dict) -> dict:
         info = {
             "name": profile.get("real_name") or user.get("name") or user_id,
             "email": email,
-            "is_internal": email.endswith(f"@{INTERNAL_DOMAIN}") if email else False,
+            "is_internal": is_internal_email(email),
         }
         users[user_id] = info
         return info

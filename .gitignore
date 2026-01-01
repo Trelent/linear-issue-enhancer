@@ -11,3 +11,6 @@ wheels/
 
 # Env files
 .env*
+
+# Credentials
+credentials/

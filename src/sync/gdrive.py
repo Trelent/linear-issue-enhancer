@@ -7,7 +7,7 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from src.sync.config import INTERNAL_DOMAIN
+from src.sync.config import is_internal_email
 
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 
@@ -69,7 +69,7 @@ def _format_doc_markdown(doc: dict, content: str) -> str:
     for owner in owners:
         email = owner.get("emailAddress", "")
         name = owner.get("displayName", email)
-        tag = "internal" if email.endswith(f"@{INTERNAL_DOMAIN}") else "external"
+        tag = "internal" if is_internal_email(email) else "external"
         lines.append(f"| Owner | {name} <{email}> [{tag}] |")
 
     lines.append(f"| Source | Google Drive |")
