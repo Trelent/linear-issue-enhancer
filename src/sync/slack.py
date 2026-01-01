@@ -20,12 +20,17 @@ def sync_slack(output_dir: Path, token: str, state: dict) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
     client = WebClient(token=token)
 
-    # Load/update user cache
     users = _load_user_cache(output_dir)
     new_state = {}
 
     channels = _get_channels(client)
-    for channel in channels:
+    print(f"  📨 Slack: Found {len(channels)} channels")
+
+    synced_count = 0
+    skipped_count = 0
+    total_messages = 0
+
+    for i, channel in enumerate(channels, 1):
         channel_id = channel["id"]
         channel_name = channel["name"]
 
@@ -34,13 +39,20 @@ def sync_slack(output_dir: Path, token: str, state: dict) -> dict:
 
         if not messages:
             new_state[channel_id] = state.get(channel_id, {"last_ts": "0", "name": channel_name})
+            skipped_count += 1
             continue
 
         md_path = output_dir / f"{channel_name}.md"
         _append_messages_to_md(md_path, channel_name, messages)
         new_state[channel_id] = {"last_ts": latest_ts, "name": channel_name}
 
+        reply_count = sum(len(m.get("replies", [])) for m in messages)
+        total_messages += len(messages) + reply_count
+        synced_count += 1
+        print(f"     #{channel_name}: +{len(messages)} messages, +{reply_count} replies")
+
     _save_user_cache(output_dir, users)
+    print(f"  ✓ Slack: {synced_count} channels updated, {skipped_count} unchanged, {total_messages} total messages")
     return new_state
 
 
@@ -62,7 +74,7 @@ def _get_channels(client: WebClient) -> list:
         result = client.conversations_list(types="public_channel,private_channel", limit=200)
         return result.get("channels", [])
     except SlackApiError as e:
-        print(f"Slack API error listing channels: {e}")
+        print(f"  ✗ Slack API error listing channels: {e}")
         return []
 
 
@@ -106,7 +118,6 @@ def _get_messages_with_threads(client: WebClient, channel_id: str, users: dict, 
                 "replies": [],
             }
 
-            # Fetch thread replies if this message has them
             if msg.get("thread_ts") == msg["ts"] and msg.get("reply_count", 0) > 0:
                 enriched_msg["replies"] = _get_thread_replies(client, channel_id, msg["ts"], users, oldest)
 
@@ -115,7 +126,7 @@ def _get_messages_with_threads(client: WebClient, channel_id: str, users: dict, 
         latest_ts = max(m["ts"] for m in messages)
         return enriched, latest_ts
     except SlackApiError as e:
-        print(f"Slack API error fetching messages: {e}")
+        print(f"  ✗ Error fetching messages from channel {channel_id}: {e}")
         return [], oldest
 
 
@@ -123,12 +134,12 @@ def _get_thread_replies(client: WebClient, channel_id: str, thread_ts: str, user
     """Get replies in a thread, excluding the parent message."""
     try:
         result = client.conversations_replies(channel=channel_id, ts=thread_ts, oldest=oldest, limit=100)
-        replies = result.get("messages", [])[1:]  # Skip parent message
+        replies = result.get("messages", [])[1:]
 
         enriched = []
         for reply in replies:
             if float(reply["ts"]) <= float(oldest):
-                continue  # Skip already-synced replies
+                continue
             user_info = _get_user_info(client, reply.get("user", ""), users)
             enriched.append({
                 "ts": reply["ts"],
@@ -166,7 +177,6 @@ def _append_messages_to_md(path: Path, channel_name: str, messages: list):
 
         lines.append(f"---\n### {user_str}\n*{time_str}*\n\n{msg['text']}\n")
 
-        # Format thread replies indented
         if msg["replies"]:
             lines.append("\n<details><summary>📎 Thread replies</summary>\n")
             for reply in msg["replies"]:
