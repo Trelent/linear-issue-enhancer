@@ -88,6 +88,171 @@ def list_repo_branches(repo: str) -> str:
     return "\n".join(lines)
 
 
+@function_tool
+def list_prs(repo: str, state: str = "open") -> str:
+    """List pull requests for a repository, ordered by most recent activity.
+
+    Args:
+        repo: The repository in owner/repo format (e.g., Trelent/backend).
+        state: Filter by state: "open", "closed", "merged", or "all" (default: open).
+    """
+    result = subprocess.run(
+        [
+            "gh", "pr", "list",
+            "--repo", repo,
+            "--state", state,
+            "--limit", "25",
+            "--json", "number,title,author,headRefName,baseRefName,updatedAt,additions,deletions,state"
+        ],
+        capture_output=True, text=True, timeout=30
+    )
+    if result.returncode != 0:
+        return f"## ❌ Error\n\n```\n{result.stderr.strip()}\n```"
+
+    prs = json.loads(result.stdout)
+    if not prs:
+        return f"## Pull Requests for `{repo}`\n\nNo {state} pull requests found."
+
+    # Sort by updatedAt descending
+    prs.sort(key=lambda p: p.get("updatedAt", ""), reverse=True)
+
+    lines = [
+        f"## Pull Requests for `{repo}` ({state})",
+        "",
+        f"Found **{len(prs)}** pull requests:",
+        "",
+    ]
+
+    for pr in prs:
+        number = pr.get("number", "?")
+        title = pr.get("title", "Untitled")
+        author = pr.get("author", {}).get("login", "unknown")
+        head = pr.get("headRefName", "?")
+        base = pr.get("baseRefName", "?")
+        additions = pr.get("additions", 0)
+        deletions = pr.get("deletions", 0)
+
+        lines.append(f"### #{number}: {title}")
+        lines.append("")
+        lines.append(f"| Property | Value |")
+        lines.append(f"|----------|-------|")
+        lines.append(f"| **Author** | @{author} |")
+        lines.append(f"| **Branch** | `{head}` → `{base}` |")
+        lines.append(f"| **Changes** | +{additions} / -{deletions} |")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+@function_tool
+def get_pr_details(repo: str, pr_number: int, include_diff: bool = False) -> str:
+    """Get detailed information about a specific pull request.
+
+    Args:
+        repo: The repository in owner/repo format (e.g., Trelent/backend).
+        pr_number: The PR number to fetch.
+        include_diff: If True, include the full diff (can be large).
+    """
+    result = subprocess.run(
+        [
+            "gh", "pr", "view", str(pr_number),
+            "--repo", repo,
+            "--json", "number,title,body,author,headRefName,baseRefName,state,additions,deletions,files,comments,reviews"
+        ],
+        capture_output=True, text=True, timeout=30
+    )
+    if result.returncode != 0:
+        return f"## ❌ Error\n\n```\n{result.stderr.strip()}\n```"
+
+    pr = json.loads(result.stdout)
+    number = pr.get("number", pr_number)
+    title = pr.get("title", "Untitled")
+    body = pr.get("body", "_No description_") or "_No description_"
+    author = pr.get("author", {}).get("login", "unknown")
+    head = pr.get("headRefName", "?")
+    base = pr.get("baseRefName", "?")
+    state = pr.get("state", "UNKNOWN")
+    additions = pr.get("additions", 0)
+    deletions = pr.get("deletions", 0)
+    files = pr.get("files", []) or []
+    comments = pr.get("comments", []) or []
+    reviews = pr.get("reviews", []) or []
+
+    lines = [
+        f"## PR #{number}: {title}",
+        "",
+        f"| Property | Value |",
+        f"|----------|-------|",
+        f"| **Author** | @{author} |",
+        f"| **State** | {state} |",
+        f"| **Branch** | `{head}` → `{base}` |",
+        f"| **Changes** | +{additions} / -{deletions} across {len(files)} files |",
+        "",
+        "### Description",
+        "",
+        body,
+        "",
+    ]
+
+    # Files changed
+    if files:
+        lines.append("### Files Changed")
+        lines.append("")
+        for f in files[:30]:
+            path = f.get("path", "?")
+            adds = f.get("additions", 0)
+            dels = f.get("deletions", 0)
+            lines.append(f"- `{path}` (+{adds} / -{dels})")
+        if len(files) > 30:
+            lines.append(f"- _...and {len(files) - 30} more files_")
+        lines.append("")
+
+    # Reviews
+    if reviews:
+        lines.append("### Reviews")
+        lines.append("")
+        for review in reviews[:10]:
+            reviewer = review.get("author", {}).get("login", "unknown")
+            review_state = review.get("state", "PENDING")
+            review_body = review.get("body", "")
+            emoji = {"APPROVED": "✅", "CHANGES_REQUESTED": "❌", "COMMENTED": "💬"}.get(review_state, "⏳")
+            lines.append(f"- {emoji} **@{reviewer}** — {review_state}")
+            if review_body:
+                lines.append(f"  > {review_body[:200]}")
+        lines.append("")
+
+    # Comments
+    if comments:
+        lines.append("### Comments")
+        lines.append("")
+        for comment in comments[:10]:
+            commenter = comment.get("author", {}).get("login", "unknown")
+            comment_body = comment.get("body", "")[:300]
+            lines.append(f"> **@{commenter}:** {comment_body}")
+            lines.append("")
+        if len(comments) > 10:
+            lines.append(f"_...and {len(comments) - 10} more comments_")
+            lines.append("")
+
+    # Diff (optional)
+    if include_diff:
+        diff_result = subprocess.run(
+            ["gh", "pr", "diff", str(pr_number), "--repo", repo],
+            capture_output=True, text=True, timeout=60
+        )
+        if diff_result.returncode == 0:
+            diff_lines = diff_result.stdout.splitlines()
+            lines.append("### Diff")
+            lines.append("")
+            lines.append("```diff")
+            lines.extend(diff_lines[:500])
+            if len(diff_lines) > 500:
+                lines.append(f"... truncated ({len(diff_lines) - 500} more lines)")
+            lines.append("```")
+
+    return "\n".join(lines)
+
+
 # -----------------------------------------------------------------------------
 # File & Directory Tools
 # -----------------------------------------------------------------------------

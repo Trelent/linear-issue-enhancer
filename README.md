@@ -1,173 +1,90 @@
 # Linear Enhancer
 
-AI-powered issue creation from context across Slack, Google Drive, and GitHub. Uses Claude to research relevant context and write comprehensive Linear issues.
+AI-powered issue creation from context across Slack, Google Drive, and GitHub.
+
+## Usage
+
+### Create an Issue
+
+```bash
+# Specify repo and branch
+uv run python -m src.main issue \
+  -p "Fix the authentication timeout issue" \
+  -r Trelent/backend \
+  -b develop \
+  -d ./data
+
+# Let the agent discover the relevant repo from context
+uv run python -m src.main issue \
+  -p "Fix the rate limiting bug we discussed in Slack" \
+  -d ./data
+```
+
+| Flag | Description |
+|------|-------------|
+| `-p, --prompt` | Issue description (required) |
+| `-r, --repo` | GitHub repo (`owner/repo`). Omit to auto-discover. |
+| `-b, --branch` | Branch to analyze (default: repo's default) |
+| `-d, --docs` | Directory with synced context (required) |
+
+### Sync Context
+
+Pull latest Slack messages and Google Drive docs:
+
+```bash
+uv run python -m src.main sync -d ./data
+```
+
+Syncs incrementally — only fetches new messages and modified docs.
 
 ## Setup
 
 ```bash
-# Install dependencies
 uv sync
-
-# Copy environment template
 cp env.example .env
 ```
 
-### Environment Variables
+### Required
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `ANTHROPIC_API_KEY` | Yes | Anthropic API key for Claude |
-| `SLACK_TOKEN` | Yes | Slack user token (`xoxp-...`) or bot token (`xoxb-...`) |
-| `GDRIVE_CREDS` | No | Path to Google Drive credentials JSON |
-| `INTERNAL_DOMAINS` | No | Comma-separated email domains for internal user tagging (default: `trelent.com`) |
+| Variable | Description |
+|----------|-------------|
+| `ANTHROPIC_API_KEY` | Anthropic API key |
+| `SLACK_TOKEN` | Slack user token (`xoxp-...`) |
 
-### Slack Token Setup
-
-User tokens are recommended (access all channels you're in without adding a bot):
-
-1. Go to [api.slack.com/apps](https://api.slack.com/apps)
-2. Create a new app → "From scratch"
-3. Go to **OAuth & Permissions**
-4. Add these **User Token Scopes**:
-   - `channels:history`, `channels:read`
-   - `groups:history`, `groups:read`
-   - `users:read`, `users:read.email`
-5. Install to workspace
-6. Copy the **User OAuth Token** (`xoxp-...`)
-
-### Google Drive Setup
-
-1. Go to [Google Cloud Console](https://console.cloud.google.com/)
-2. Create/select a project
-3. Enable **Google Drive API** and **Google Sheets API**
-4. Create a **Service Account**:
-   - APIs & Services → Credentials → Create Credentials → Service Account
-   - Download the JSON key
-5. Share folders/drives with the service account email
-
-## Usage
-
-### Sync Data
-
-Pull latest messages from Slack and docs from Google Drive:
+### GitHub CLI
 
 ```bash
-uv run python -m src.main sync --docs ./data
+brew install gh
+gh auth login
 ```
 
-Options:
-- `--docs, -d` — Directory to store synced markdown files (required)
-- `--slack-token` — Override Slack token (or use `SLACK_TOKEN` env var)
-- `--gdrive-creds` — Override GDrive credentials path (or use `GDRIVE_CREDS` env var)
+Enables repo discovery, branch listing, and README fetching.
 
-**What gets synced:**
-- **Slack**: All channels you're a member of → `data/slack/{channel}.md`
-- **Google Drive**: All Docs and Sheets in shared drives → `data/gdrive/{doc}.md`
+### Optional: Google Drive
 
-**Incremental sync:**
-- Only fetches new Slack messages since last sync (tracked per-channel)
-- Only re-downloads Google Docs if modified since last sync
-- State stored in `data/sync_state.json`
+Set `GDRIVE_CREDS` to a service account JSON path. See [Google Cloud Console](https://console.cloud.google.com/) to create one.
 
-### Create Issue
+### Slack Token
 
-Generate a comprehensive Linear issue from all context sources:
+1. Create app at [api.slack.com/apps](https://api.slack.com/apps)
+2. Add **User Token Scopes**: `channels:history`, `channels:read`, `groups:history`, `groups:read`, `users:read`
+3. Install and copy the User OAuth Token
 
-```bash
-uv run python -m src.main issue \
-  --prompt "We need to fix the authentication timeout issue" \
-  --repo https://github.com/org/repo \
-  --docs ./data
-```
+## How It Works
 
-Options:
-- `--prompt, -p` — Issue description/request (required)
-- `--repo, -r` — GitHub repository URL to analyze (required)
-- `--docs, -d` — Directory with synced markdown context (required)
-- `--sync-max-age` — Minutes before auto-resync (default: 30)
+1. **Context Researcher** — searches synced Slack/GDrive markdown for relevant context
+2. **Code Researcher** — discovers repos via `gh`, fetches README summaries, clones and analyzes code
+3. **Issue Writer** — synthesizes everything into a structured Linear issue
 
-**What happens:**
-1. Auto-syncs if data is older than `--sync-max-age`
-2. **Context Researcher** agent searches Slack/GDrive markdown files for relevant context
-3. **Code Researcher** agent clones the repo and analyzes relevant code
-4. **Issue Writer** agent synthesizes everything into a structured Linear issue
-
-## Data Format
-
-### Slack Messages
-
-```markdown
-# #channel-name
-
----
-### **John Smith** <john@company.com> [internal]
-*2025-01-01 14:30*
-
-Message text here...
-
-<details><summary>📎 Thread replies</summary>
-
-> **External User** <client@acme.com> [external] *2025-01-01 14:45*
->
-> Reply text...
-
-</details>
-```
-
-### Google Docs
-
-```markdown
-# Document Title
-
-| Property | Value |
-|----------|-------|
-| Last Modified | 2025-01-01 10:00 |
-| Owner | Jane Doe <jane@company.com> [internal] |
-| Source | Google Drive |
-| Doc ID | `abc123` |
-
----
-
-Document content here...
-```
-
-### Google Sheets
-
-Each sheet becomes a markdown table with formulas shown inline:
-
-```markdown
-## 📊 Sheet Name
-
-| Column A | Column B |
-| --- | --- |
-| 100 | 200 `=A1*2` |
-| Total | 300 `=SUM(B1:B2)` |
-```
+Repo discovery results are cached for 1 hour in `data/github_cache.json`.
 
 ## Architecture
 
 ```
 src/
 ├── main.py              # CLI and orchestration
-├── tools.py             # Function tools (grep, read, clone)
-├── agents/
-│   ├── context_researcher.py  # Searches markdown files
-│   ├── code_researcher.py     # Analyzes GitHub repos
-│   └── issue_writer.py        # Writes Linear issues
-└── sync/
-    ├── __init__.py      # Sync orchestration
-    ├── config.py        # Environment config
-    ├── slack.py         # Slack API sync
-    └── gdrive.py        # Google Drive API sync
+├── tools.py             # Agent tools (grep, read, clone, GitHub discovery)
+├── github_cache.py      # Repo caching with README fetching
+├── agents/              # Claude agents
+└── sync/                # Slack and GDrive sync
 ```
-
-## Development
-
-```bash
-# Run sync
-uv run python -m src.main sync --docs ./data
-
-# Run issue creation
-uv run python -m src.main issue -p "Fix auth bug" -r https://github.com/org/repo -d ./data
-```
-
