@@ -140,7 +140,7 @@ async def linear_webhook(request: Request, background_tasks: BackgroundTasks):
     signature = request.headers.get("linear-signature")
     
     if not _verify_signature(body, signature):
-        print("❌ Webhook signature verification failed", flush=True)
+        print("❌ [WH] Signature verification failed", flush=True)
         raise HTTPException(status_code=401, detail="Invalid signature")
     
     payload = await request.json()
@@ -148,39 +148,42 @@ async def linear_webhook(request: Request, background_tasks: BackgroundTasks):
     action = payload.get("action")
     event_type = payload.get("type")
     data = payload.get("data", {})
-    
-    print(f"📨 Webhook received: {event_type}/{action}", flush=True)
+    issue_id = data.get("id", "?")
+    title = data.get("title", "?")
     
     # Only process issue creation events
     if event_type != "Issue" or action != "create":
+        print(f"· [WH] {event_type}/{action} → ignored", flush=True)
         return {"status": "ignored", "reason": f"Not an issue create event: {event_type}/{action}"}
     
-    issue_id = data.get("id")
-    if not issue_id:
+    if not data.get("id"):
+        print(f"· [WH] Issue/create but missing ID → error", flush=True)
         raise HTTPException(status_code=400, detail="Missing issue ID")
     
-    title = data.get("title", "")
     description = data.get("description") or ""
+    desc_len = len(description)
     
     # Check if we already processed this issue recently (prevents loops)
     if _was_recently_processed(issue_id):
-        print(f"⏭️ Skipping {issue_id}: recently processed", flush=True)
+        print(f"· [WH] Issue/create \"{title[:40]}\" → skipped (recently processed)", flush=True)
         return {"status": "skipped", "reason": "Recently processed"}
     
     # Check if description already has our marker
     if ENHANCEMENT_MARKER in description:
-        print(f"⏭️ Skipping {issue_id}: already enhanced", flush=True)
+        print(f"· [WH] Issue/create \"{title[:40]}\" → skipped (already enhanced)", flush=True)
         return {"status": "skipped", "reason": "Already enhanced"}
     
-    # Skip if description is already substantial (> 200 chars)
-    if len(description) > 200:
-        print(f"⏭️ Skipping {issue_id}: already has substantial description", flush=True)
+    # Skip if description is already substantial (> 1000 chars)
+    if desc_len > 1000:
+        print(f"· [WH] Issue/create \"{title[:40]}\" → skipped (desc {desc_len} chars)", flush=True)
         return {"status": "skipped", "reason": "Issue already has substantial description"}
     
     # Mark as processing to prevent loops
     _mark_as_processed(issue_id)
     
-    print(f"✅ Queuing enhancement for: {title}", flush=True)
+    print(f"", flush=True)
+    print(f"▶ [WH] PROCESSING: \"{title}\"", flush=True)
+    print(f"       ID: {issue_id} | Desc: {desc_len} chars", flush=True)
     
     # Queue enhancement in background
     background_tasks.add_task(enhance_issue, issue_id, title, description)
