@@ -8,7 +8,7 @@ from agents import Runner
 load_dotenv()
 
 from src.agents import context_researcher, code_researcher, issue_writer
-from src.sync import sync_all, needs_sync
+from src.sync import sync_all, sync_all_async, needs_sync
 
 
 async def research_context(prompt: str, docs_dir: str) -> str:
@@ -66,10 +66,10 @@ async def create_issue(
     sync_max_age: int = 30,
 ) -> str:
     """Main function to create a Linear issue from all sources."""
-    # Sync if needed
+    # Sync if needed (async to allow parallel sync of sources)
     if needs_sync(docs_dir, max_age_minutes=sync_max_age):
         print("📥 Syncing data from Slack and Google Drive...")
-        sync_all(docs_dir, slack_token=slack_token, gdrive_creds=gdrive_creds)
+        await sync_all_async(docs_dir, slack_token=slack_token, gdrive_creds=gdrive_creds)
 
     with tempfile.TemporaryDirectory() as work_dir:
         context, code_analysis = await asyncio.gather(
