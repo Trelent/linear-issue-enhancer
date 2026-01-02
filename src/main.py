@@ -29,8 +29,14 @@ async def research_context(prompt: str, docs_dir: str) -> str:
     return str(result.final_output)
 
 
-async def research_codebase(prompt: str, repo: str | None, branch: str | None, work_dir: str) -> str:
-    """Research the codebase for relevant context."""
+async def research_codebase(
+    prompt: str, 
+    context: str,
+    repo: str | None, 
+    branch: str | None, 
+    work_dir: str,
+) -> str:
+    """Research the codebase, informed by context from Slack/GDrive."""
     repo_dir = os.path.join(work_dir, "repo")
 
     if repo:
@@ -39,11 +45,14 @@ Target directory: `{repo_dir}`"""
         if branch:
             clone_instruction += f"\nBranch: `{branch}`"
     else:
-        clone_instruction = f"""No specific repository was provided. Use `list_github_repos` to discover 
-available repositories, then identify which one is most relevant to the issue.
-
-Once you've identified the repo, use `get_repo_info` to check its default branch,
-then clone it to: `{repo_dir}`"""
+        clone_instruction = f"""1. **Discover repos**: Use `list_github_repos` to see available repositories
+2. **Identify the right repo**: Based on the issue and context above
+3. **Check for relevant PRs**: Use `list_prs` to see if any open PRs relate to this issue
+4. **Determine the right branch**: 
+   - If context mentions a specific branch (e.g. "on dev", "in feature-x"), use `list_repo_branches` to find it
+   - If a PR is relevant, use `get_pr_details` to inspect it and consider cloning its branch
+   - Otherwise, use the repo's default branch
+5. **Clone and analyze**: Clone to `{repo_dir}` with the appropriate branch"""
 
     result = await Runner.run(
         code_researcher,
@@ -52,10 +61,14 @@ then clone it to: `{repo_dir}`"""
 ## Issue
 {prompt}
 
+## Context from Slack/GDrive
+{context}
+
 ## Instructions
 {clone_instruction}
 
-Analyze the codebase and find all relevant code and context.""",
+Pay attention to any branch names, PR references, or environment mentions in the context above.
+Find all relevant code, files, and implementation details.""",
         max_turns=MAX_TURNS,
     )
     return str(result.final_output)
@@ -108,12 +121,16 @@ async def create_issue(
         print("📥 Syncing data from Slack and Google Drive...")
         await sync_all_async(docs_dir, slack_token=slack_token, gdrive_creds=gdrive_creds)
 
+    # Step 1: Research context first (Slack/GDrive)
+    print("🔬 Step 1: Researching context (Slack/GDrive)...")
+    context = await research_context(prompt, docs_dir)
+    
+    # Step 2: Research codebase WITH context (so it knows about branches/PRs)
+    print("🔬 Step 2: Researching codebase (with context)...")
     with tempfile.TemporaryDirectory() as work_dir:
-        context, code_analysis = await asyncio.gather(
-            research_context(prompt, docs_dir),
-            research_codebase(prompt, repo, branch, work_dir),
-        )
-        return await write_issue(prompt, context, code_analysis)
+        code_analysis = await research_codebase(prompt, context, repo, branch, work_dir)
+    
+    return await write_issue(prompt, context, code_analysis)
 
 
 def cmd_sync(args):

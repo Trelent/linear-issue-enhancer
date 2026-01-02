@@ -212,6 +212,9 @@ async def enhance_issue(issue_id: str, title: str, existing_description: str):
     print(f"🔍 Enhancing issue: {title}", flush=True)
     print(f"{'='*60}\n", flush=True)
     
+    # Add "working on it" comment
+    await add_comment(issue_id, "🔍 _Adding context to this issue now..._")
+    
     try:
         # Build prompt from title and existing description
         prompt = f"Issue: {title}"
@@ -223,27 +226,22 @@ async def enhance_issue(issue_id: str, title: str, existing_description: str):
             print("📥 Syncing data sources...", flush=True)
             await sync_all_async(DOCS_DIR, slack_token=SLACK_TOKEN, gdrive_creds=GDRIVE_CREDS)
         
-        # Research context and codebase in parallel
+        # Step 1: Research context from Slack/GDrive FIRST
+        print("🔬 Step 1: Researching context (Slack/GDrive)...", flush=True)
+        try:
+            context = await _research_context(prompt)
+        except Exception as e:
+            print(f"⚠️ Context research error: {e}", flush=True)
+            context = f"Error researching context: {e}"
+        
+        # Step 2: Research codebase WITH context (so it knows about branches/PRs mentioned)
+        print("🔬 Step 2: Researching codebase (with context)...", flush=True)
         with tempfile.TemporaryDirectory() as work_dir:
-            print("🔬 Starting research (context + code)...", flush=True)
-            context_result, code_result = await asyncio.gather(
-                _research_context(prompt),
-                _research_codebase(prompt, work_dir),
-                return_exceptions=True,
-            )
-            
-            # Handle any errors with detailed logging
-            if isinstance(context_result, Exception):
-                print(f"⚠️ Context research error: {context_result}", flush=True)
-                context = f"Error researching context: {context_result}"
-            else:
-                context = str(context_result)
-                
-            if isinstance(code_result, Exception):
-                print(f"⚠️ Code research error: {code_result}", flush=True)
-                code_analysis = f"Error researching code: {code_result}"
-            else:
-                code_analysis = str(code_result)
+            try:
+                code_analysis = await _research_codebase(prompt, context, work_dir)
+            except Exception as e:
+                print(f"⚠️ Code research error: {e}", flush=True)
+                code_analysis = f"Error researching code: {e}"
         
         # Generate enhanced description
         print("✍️ Writing enhanced description...", flush=True)
@@ -258,14 +256,16 @@ async def enhance_issue(issue_id: str, title: str, existing_description: str):
         
         if success:
             print(f"✅ Issue enhanced successfully!", flush=True)
-            await add_comment(issue_id, "_This issue was automatically enhanced with context from Slack, Google Drive, and GitHub._")
+            await add_comment(issue_id, "_✅ Issue enhanced with context from Slack, Google Drive, and GitHub._")
         else:
             print(f"❌ Failed to update issue via Linear API", flush=True)
+            await add_comment(issue_id, "⚠️ _Failed to update issue description. Please check the logs._")
             
     except Exception as e:
         print(f"❌ Enhancement failed with error: {e}", flush=True)
         import traceback
         traceback.print_exc()
+        await add_comment(issue_id, f"❌ _Enhancement failed: {e}_")
 
 
 async def _research_context(prompt: str) -> str:
@@ -278,8 +278,8 @@ async def _research_context(prompt: str) -> str:
     return str(result.final_output)
 
 
-async def _research_codebase(prompt: str, work_dir: str) -> str:
-    """Research the codebase."""
+async def _research_codebase(prompt: str, context: str, work_dir: str) -> str:
+    """Research the codebase, informed by context from Slack/GDrive."""
     repo_dir = os.path.join(work_dir, "repo")
     
     result = await Runner.run(
@@ -289,14 +289,21 @@ async def _research_codebase(prompt: str, work_dir: str) -> str:
 ## Issue
 {prompt}
 
+## Context from Slack/GDrive
+{context}
+
 ## Instructions
-No specific repository was provided. Use `list_github_repos` to discover 
-available repositories, then identify which one is most relevant to the issue.
+1. **Discover repos**: Use `list_github_repos` to see available repositories
+2. **Identify the right repo**: Based on the issue and context above
+3. **Check for relevant PRs**: Use `list_prs` to see if any open PRs relate to this issue
+4. **Determine the right branch**: 
+   - If context mentions a specific branch (e.g. "on dev", "in feature-x"), use `list_repo_branches` to find it
+   - If a PR is relevant, use `get_pr_details` to inspect it and consider cloning its branch
+   - Otherwise, use the repo's default branch
+5. **Clone and analyze**: Clone to `{repo_dir}` with the appropriate branch
 
-Once you've identified the repo, use `get_repo_info` to check its default branch,
-then clone it to: `{repo_dir}`
-
-Analyze the codebase and find all relevant code and context.""",
+Pay attention to any branch names, PR references, or environment mentions in the context above.
+Find all relevant code, files, and implementation details.""",
         max_turns=MAX_TURNS,
     )
     return str(result.final_output)
