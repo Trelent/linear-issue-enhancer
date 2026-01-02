@@ -234,6 +234,28 @@ def get_pr_details(repo: str, pr_number: int, include_diff: bool = False) -> str
             lines.append(f"_...and {len(comments) - 10} more comments_")
             lines.append("")
 
+    # Inline review comments (code-level comments)
+    inline_result = subprocess.run(
+        ["gh", "api", f"repos/{repo}/pulls/{pr_number}/comments", "--paginate"],
+        capture_output=True, text=True, timeout=30
+    )
+    if inline_result.returncode == 0:
+        inline_comments = json.loads(inline_result.stdout) if inline_result.stdout.strip() else []
+        if inline_comments:
+            lines.append("### Inline Code Comments")
+            lines.append("")
+            for ic in inline_comments[:20]:
+                author = ic.get("user", {}).get("login", "unknown")
+                path = ic.get("path", "?")
+                line_num = ic.get("line") or ic.get("original_line") or "?"
+                body = ic.get("body", "")[:300]
+                lines.append(f"**`{path}:{line_num}`** — @{author}")
+                lines.append(f"> {body}")
+                lines.append("")
+            if len(inline_comments) > 20:
+                lines.append(f"_...and {len(inline_comments) - 20} more inline comments_")
+                lines.append("")
+
     # Diff (optional)
     if include_diff:
         diff_result = subprocess.run(
