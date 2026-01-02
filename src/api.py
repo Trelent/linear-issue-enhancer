@@ -21,7 +21,7 @@ add_trace_processor(ConsoleTracer())
 
 from src.linear import update_issue_description, add_comment
 from src.agents import context_researcher, code_researcher, issue_writer
-from src.sync import needs_sync, sync_all_async
+from src.sync import sync_all_async
 from agents import Runner
 
 
@@ -221,10 +221,9 @@ async def enhance_issue(issue_id: str, title: str, existing_description: str):
         if existing_description:
             prompt += f"\n\nExisting notes:\n{existing_description}"
         
-        # Sync data if needed
-        if needs_sync(DOCS_DIR, max_age_minutes=30):
-            print("📥 Syncing data sources...", flush=True)
-            await sync_all_async(DOCS_DIR, slack_token=SLACK_TOKEN, gdrive_creds=GDRIVE_CREDS)
+        # Always sync to ensure we have the latest data
+        print("📥 Syncing data sources...", flush=True)
+        await sync_all_async(DOCS_DIR, slack_token=SLACK_TOKEN, gdrive_creds=GDRIVE_CREDS)
         
         # Step 1: Research context from Slack/GDrive FIRST
         print("🔬 Step 1: Researching context (Slack/GDrive)...", flush=True)
