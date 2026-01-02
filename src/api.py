@@ -226,8 +226,14 @@ async def enhance_issue(
         print(f"   Project: {project_name}", flush=True)
     print(f"{'='*60}\n", flush=True)
     
-    # Add "working on it" comment
-    await add_comment(issue_id, "🔍 _Adding context to this issue now..._")
+    # Add "working on it" comment - if this fails, the issue was likely deleted
+    try:
+        await add_comment(issue_id, "🔍 _Adding context to this issue now..._")
+    except Exception as e:
+        if "Entity not found" in str(e) or "not found" in str(e).lower():
+            print(f"⚠️ Issue {issue_id} no longer exists, skipping enhancement", flush=True)
+            return
+        raise  # Re-raise other errors
     
     try:
         # Build prompt from title, project context, and existing description
