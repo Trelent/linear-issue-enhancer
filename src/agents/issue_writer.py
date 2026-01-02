@@ -25,5 +25,12 @@ The developer assigned to this issue will decide how to approach the solution.
 - DO NOT plan the work - just describe what needs to happen
 
 ## Format
-Write in clear Markdown. Be concise but thorough. Let the context speak for itself. Link to relevant files/resources directly rather than describing them.""",
+Write in clear Markdown. Be concise but thorough. Let the context speak for itself. Link to relevant files/resources directly rather than describing them.
+
+## Repository Tag (REQUIRED)
+At the very end of your output, on its own line, include the repository tag:
+`[repo=owner/repository]`
+
+Extract the repository name from the codebase analysis (it will be mentioned as "Repository: owner/repo").
+This tag MUST be the last line of your output and PERFECTLY match the above format (including the `[repo=...]` prefix).""",
 )

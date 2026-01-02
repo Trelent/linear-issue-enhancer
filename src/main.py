@@ -112,25 +112,31 @@ async def create_issue(
     docs_dir: str,
     repo: str | None = None,
     branch: str | None = None,
+    project: str | None = None,
     slack_token: str | None = None,
     gdrive_creds: str | None = None,
     sync_max_age: int = 30,
 ) -> str:
     """Main function to create a Linear issue from all sources."""
+    # Include project context in the prompt if provided
+    full_prompt = prompt
+    if project:
+        full_prompt = f"Linear Project: {project}\n\n{prompt}"
+    
     if needs_sync(docs_dir, max_age_minutes=sync_max_age):
         print("📥 Syncing data from Slack and Google Drive...")
         await sync_all_async(docs_dir, slack_token=slack_token, gdrive_creds=gdrive_creds)
 
     # Step 1: Research context first (Slack/GDrive)
     print("🔬 Step 1: Researching context (Slack/GDrive)...")
-    context = await research_context(prompt, docs_dir)
+    context = await research_context(full_prompt, docs_dir)
     
     # Step 2: Research codebase WITH context (so it knows about branches/PRs)
     print("🔬 Step 2: Researching codebase (with context)...")
     with tempfile.TemporaryDirectory() as work_dir:
-        code_analysis = await research_codebase(prompt, context, repo, branch, work_dir)
+        code_analysis = await research_codebase(full_prompt, context, repo, branch, work_dir)
     
-    return await write_issue(prompt, context, code_analysis)
+    return await write_issue(full_prompt, context, code_analysis)
 
 
 def cmd_sync(args):
@@ -152,6 +158,7 @@ async def cmd_issue(args):
         docs_dir=args.docs,
         repo=args.repo,
         branch=args.branch,
+        project=args.project,
         slack_token=os.getenv("SLACK_TOKEN") or args.slack_token,
         gdrive_creds=os.getenv("GDRIVE_CREDS") or args.gdrive_creds,
         sync_max_age=args.sync_max_age,
@@ -179,6 +186,7 @@ def main():
     issue_parser.add_argument("--prompt", "-p", required=True, help="Issue prompt/description")
     issue_parser.add_argument("--repo", "-r", help="GitHub repository (owner/repo). Omit to auto-discover.")
     issue_parser.add_argument("--branch", "-b", help="Branch to analyze (default: repo's default branch)")
+    issue_parser.add_argument("--project", help="Linear project name (provides context for repo selection)")
     issue_parser.add_argument("--docs", "-d", default="./data", help="Directory with context files (default: ./data)")
     issue_parser.add_argument("--slack-token", help="Slack bot token (or set SLACK_TOKEN env var)")
     issue_parser.add_argument("--gdrive-creds", help="Path to Google Drive credentials JSON (or set GDRIVE_CREDS)")

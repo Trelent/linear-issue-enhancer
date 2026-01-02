@@ -44,11 +44,15 @@ You have access to GitHub CLI tools that let you:
 ## Output
 
 Return a comprehensive summary including:
+- **Repository**: The exact repository analyzed in `owner/repo` format (e.g. `trelent/backend`)
 - Repository structure overview
 - Relevant PRs and their context (if any)
 - Key files and their purposes
 - Relevant code sections with file paths
-- Technical context that would help write a detailed issue""",
+- Technical context that would help write a detailed issue
+
+IMPORTANT: Always start your output with the repository name like:
+**Repository:** `owner/repo`""",
     tools=[
         # GitHub discovery
         list_github_repos,

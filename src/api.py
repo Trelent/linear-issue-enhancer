@@ -178,6 +178,12 @@ async def linear_webhook(request: Request, background_tasks: BackgroundTasks):
     description = data.get("description") or ""
     desc_len = len(description)
     
+    # Extract project/team context
+    project = data.get("project", {})
+    project_name = project.get("name") if project else None
+    team = data.get("team", {})
+    team_name = team.get("name") if team else None
+    
     # Check if we already processed this issue recently (prevents loops)
     if _was_recently_processed(issue_id):
         print(f"· [WH] Issue/create \"{title[:40]}\" → skipped (recently processed)", flush=True)
@@ -201,23 +207,35 @@ async def linear_webhook(request: Request, background_tasks: BackgroundTasks):
     print(f"       ID: {issue_id} | Desc: {desc_len} chars", flush=True)
     
     # Queue enhancement in background
-    background_tasks.add_task(enhance_issue, issue_id, title, description)
+    background_tasks.add_task(enhance_issue, issue_id, title, description, project_name, team_name)
     
     return {"status": "queued", "issue_id": issue_id}
 
 
-async def enhance_issue(issue_id: str, title: str, existing_description: str):
+async def enhance_issue(
+    issue_id: str, 
+    title: str, 
+    existing_description: str,
+    project_name: str | None = None,
+    team_name: str | None = None,
+):
     """Enhance an issue with AI-researched context."""
     print(f"\n{'='*60}", flush=True)
     print(f"🔍 Enhancing issue: {title}", flush=True)
+    if project_name:
+        print(f"   Project: {project_name}", flush=True)
     print(f"{'='*60}\n", flush=True)
     
     # Add "working on it" comment
     await add_comment(issue_id, "🔍 _Adding context to this issue now..._")
     
     try:
-        # Build prompt from title and existing description
+        # Build prompt from title, project context, and existing description
         prompt = f"Issue: {title}"
+        if project_name:
+            prompt += f"\nLinear Project: {project_name}"
+        if team_name:
+            prompt += f"\nLinear Team: {team_name}"
         if existing_description:
             prompt += f"\n\nExisting notes:\n{existing_description}"
         
