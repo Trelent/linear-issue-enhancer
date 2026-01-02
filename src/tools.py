@@ -289,7 +289,7 @@ def grep_files(pattern: str, directory: str, file_glob: str = "*.md") -> str:
         file_glob: File pattern to match (default: *.md).
     """
     result = subprocess.run(
-        ["grep", "-r", "-n", "-i", "--include", file_glob, pattern, directory],
+        ["grep", "-r", "-n", "-i", "-E", "--include", file_glob, pattern, directory],
         capture_output=True, text=True, timeout=30
     )
     output = result.stdout.strip()
