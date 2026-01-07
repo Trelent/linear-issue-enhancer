@@ -19,7 +19,7 @@ from agents.tracing import add_trace_processor
 from src.tracing import ConsoleTracer
 add_trace_processor(ConsoleTracer())
 
-from src.linear import update_issue_description, add_comment
+from src.linear import update_issue_description, add_comment, get_issue
 from src.agents import context_researcher, code_researcher, issue_writer
 from src.sync import sync_all_async
 from src.tools import set_repos_base_dir, clear_cloned_repos
@@ -49,8 +49,10 @@ if not GDRIVE_CREDS and os.getenv("GDRIVE_CREDS_BASE64"):
 _recently_processed: dict[str, float] = {}
 PROCESS_COOLDOWN_SECONDS = 300  # 5 minutes
 
-# Marker we add to enhanced descriptions
+# Marker we add to enhanced descriptions (includes original description for retry)
 ENHANCEMENT_MARKER = "<!-- enhanced-by-linear-enhancer -->"
+ORIGINAL_DESC_MARKER_START = "<!-- original-description:"
+ORIGINAL_DESC_MARKER_END = ":end-original -->"
 
 # Scheduler instance
 scheduler = AsyncIOScheduler()
@@ -149,6 +151,38 @@ def _mark_as_processed(issue_id: str):
     _recently_processed[issue_id] = time.time()
 
 
+def _encode_original_description(original: str) -> str:
+    """Encode original description for storage in marker."""
+    import base64
+    return base64.b64encode(original.encode()).decode()
+
+
+def _decode_original_description(encoded: str) -> str:
+    """Decode original description from marker."""
+    import base64
+    return base64.b64decode(encoded.encode()).decode()
+
+
+def _extract_original_description(description: str) -> str | None:
+    """Extract original description from an enhanced description."""
+    start_idx = description.find(ORIGINAL_DESC_MARKER_START)
+    if start_idx == -1:
+        return None
+    
+    end_idx = description.find(ORIGINAL_DESC_MARKER_END, start_idx)
+    if end_idx == -1:
+        return None
+    
+    encoded = description[start_idx + len(ORIGINAL_DESC_MARKER_START):end_idx].strip()
+    return _decode_original_description(encoded)
+
+
+def _build_enhancement_markers(original_description: str) -> str:
+    """Build the markers to append to enhanced descriptions."""
+    encoded = _encode_original_description(original_description)
+    return f"{ENHANCEMENT_MARKER}\n{ORIGINAL_DESC_MARKER_START} {encoded} {ORIGINAL_DESC_MARKER_END}"
+
+
 @app.post("/webhook/linear")
 async def linear_webhook(request: Request, background_tasks: BackgroundTasks):
     """Handle Linear webhook events."""
@@ -164,13 +198,53 @@ async def linear_webhook(request: Request, background_tasks: BackgroundTasks):
     action = payload.get("action")
     event_type = payload.get("type")
     data = payload.get("data", {})
+    
+    # Route to appropriate handler
+    if event_type == "Comment" and action == "create":
+        return await _handle_comment_create(data, background_tasks)
+    
+    if event_type == "Issue" and action == "create":
+        return await _handle_issue_create(data, background_tasks)
+    
+    print(f"· [WH] {event_type}/{action} → ignored", flush=True)
+    return {"status": "ignored", "reason": f"Unhandled event: {event_type}/{action}"}
+
+
+async def _handle_comment_create(data: dict, background_tasks: BackgroundTasks):
+    """Handle comment creation - check for /retry command."""
+    comment_body = data.get("body") or ""
+    issue_data = data.get("issue", {})
+    issue_id = issue_data.get("id")
+    
+    if not issue_id:
+        print(f"· [WH] Comment/create but missing issue ID → ignored", flush=True)
+        return {"status": "ignored", "reason": "Missing issue ID in comment"}
+    
+    # Check for /retry command
+    if not comment_body.strip().startswith("/retry"):
+        return {"status": "ignored", "reason": "Not a /retry command"}
+    
+    # Extract feedback after /retry
+    feedback = comment_body.strip()[6:].strip()  # Remove "/retry" prefix
+    
+    print(f"", flush=True)
+    print(f"▶ [WH] RETRY REQUESTED for issue {issue_id}", flush=True)
+    if feedback:
+        print(f"       Feedback: {feedback[:60]}...", flush=True)
+    
+    # Mark as processing to prevent loops
+    _mark_as_processed(issue_id)
+    
+    # Queue retry in background
+    background_tasks.add_task(retry_enhance_issue, issue_id, feedback)
+    
+    return {"status": "queued", "action": "retry", "issue_id": issue_id}
+
+
+async def _handle_issue_create(data: dict, background_tasks: BackgroundTasks):
+    """Handle issue creation - enhance new issues."""
     issue_id = data.get("id", "?")
     title = data.get("title", "?")
-    
-    # Only process issue creation events
-    if event_type != "Issue" or action != "create":
-        print(f"· [WH] {event_type}/{action} → ignored", flush=True)
-        return {"status": "ignored", "reason": f"Not an issue create event: {event_type}/{action}"}
     
     if not data.get("id"):
         print(f"· [WH] Issue/create but missing ID → error", flush=True)
@@ -271,8 +345,9 @@ async def enhance_issue(
         print("✍️ Writing enhanced description...", flush=True)
         enhanced = await _write_enhanced_description(title, existing_description, context, code_analysis)
         
-        # Add marker to prevent re-processing
-        enhanced_with_marker = f"{enhanced}\n\n{ENHANCEMENT_MARKER}"
+        # Add markers (includes original description for retry)
+        markers = _build_enhancement_markers(existing_description)
+        enhanced_with_marker = f"{enhanced}\n\n{markers}"
         
         # Update the Linear issue
         print(f"📝 Updating Linear issue...", flush=True)
@@ -290,6 +365,97 @@ async def enhance_issue(
         import traceback
         traceback.print_exc()
         await add_comment(issue_id, f"❌ _Enhancement failed: {e}_")
+
+
+async def retry_enhance_issue(issue_id: str, feedback: str):
+    """Retry enhancing an issue based on user feedback."""
+    print(f"\n{'='*60}", flush=True)
+    print(f"🔄 Retrying enhancement for issue: {issue_id}", flush=True)
+    print(f"{'='*60}\n", flush=True)
+    
+    # Fetch current issue data
+    try:
+        issue = await get_issue(issue_id)
+    except Exception as e:
+        print(f"❌ Failed to fetch issue: {e}", flush=True)
+        return
+    
+    current_description = issue.description or ""
+    title = issue.title
+    
+    # Extract original description from marker
+    original_description = _extract_original_description(current_description)
+    if original_description is None:
+        # No marker found - use empty string as original
+        print("⚠️ No original description marker found, treating as first enhancement", flush=True)
+        original_description = ""
+    
+    # Strip markers from current description to get the AI-written part
+    ai_description = current_description
+    if ENHANCEMENT_MARKER in ai_description:
+        ai_description = ai_description.split(ENHANCEMENT_MARKER)[0].strip()
+    
+    print(f"   Title: {title}", flush=True)
+    print(f"   Original: {len(original_description)} chars", flush=True)
+    print(f"   AI version: {len(ai_description)} chars", flush=True)
+    print(f"   Feedback: {feedback[:100]}..." if len(feedback) > 100 else f"   Feedback: {feedback}", flush=True)
+    
+    # Add "working on it" comment
+    await add_comment(issue_id, "🔄 _Retrying enhancement with your feedback..._")
+    
+    try:
+        # Build prompt from title and original description
+        prompt = f"Issue: {title}"
+        if original_description:
+            prompt += f"\n\nOriginal notes:\n{original_description}"
+        
+        # Sync data sources
+        print("📥 Syncing data sources...", flush=True)
+        await sync_all_async(DOCS_DIR, slack_token=SLACK_TOKEN, gdrive_creds=GDRIVE_CREDS)
+        
+        # Research context
+        print("🔬 Step 1: Researching context (Slack/GDrive)...", flush=True)
+        try:
+            context = await _research_context(prompt)
+        except Exception as e:
+            print(f"⚠️ Context research error: {e}", flush=True)
+            context = f"Error researching context: {e}"
+        
+        # Research codebase
+        print("🔬 Step 2: Researching codebase (with context)...", flush=True)
+        with tempfile.TemporaryDirectory() as work_dir:
+            try:
+                code_analysis = await _research_codebase(prompt, context, work_dir)
+            except Exception as e:
+                print(f"⚠️ Code research error: {e}", flush=True)
+                code_analysis = f"Error researching code: {e}"
+        
+        # Generate new description with feedback context
+        print("✍️ Writing enhanced description (with feedback)...", flush=True)
+        enhanced = await _write_retry_description(
+            title, original_description, ai_description, feedback, context, code_analysis
+        )
+        
+        # Add markers (preserve original description for future retries)
+        markers = _build_enhancement_markers(original_description)
+        enhanced_with_marker = f"{enhanced}\n\n{markers}"
+        
+        # Update the Linear issue
+        print(f"📝 Updating Linear issue...", flush=True)
+        success = await update_issue_description(issue_id, enhanced_with_marker)
+        
+        if success:
+            print(f"✅ Issue re-enhanced successfully!", flush=True)
+            await add_comment(issue_id, "_✅ Issue re-enhanced based on your feedback._")
+        else:
+            print(f"❌ Failed to update issue via Linear API", flush=True)
+            await add_comment(issue_id, "⚠️ _Failed to update issue description. Please check the logs._")
+            
+    except Exception as e:
+        print(f"❌ Retry enhancement failed with error: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        await add_comment(issue_id, f"❌ _Retry enhancement failed: {e}_")
 
 
 async def _research_context(prompt: str) -> str:
@@ -368,6 +534,64 @@ async def _write_enhanced_description(
 ---
 
 Write a clear issue description. Include:
+- Problem statement: what needs to be done
+- Context: relevant background from the research above
+- Technical details: file paths, code references, error messages
+- References: ONLY real URLs found in the research (PRs, docs, etc.)
+
+IMPORTANT:
+- Do NOT suggest how to implement or approach the solution
+- Do NOT include a "Suggested Approach" or "Implementation" section
+- Do NOT make up URLs - only include links found in the research
+- Do NOT include acceptance criteria unless explicitly stated in context
+- Just DESCRIBE the problem, don't PLAN the solution
+
+Format: Markdown. No title needed - just the description body.""",
+        max_turns=MAX_TURNS,
+    )
+    return str(result.final_output)
+
+
+async def _write_retry_description(
+    title: str,
+    original: str,
+    previous_ai_version: str,
+    feedback: str,
+    context: str,
+    code_analysis: str,
+) -> str:
+    """Generate a new description based on user feedback about previous attempt."""
+    result = await Runner.run(
+        issue_writer,
+        f"""Rewrite an enhanced Linear issue description based on user feedback:
+
+## Issue Title
+{title}
+
+## Original Notes (from ticket creator)
+{original or "_No original description_"}
+
+## Previous AI-Generated Description
+{previous_ai_version}
+
+## User Feedback on Previous Version
+{feedback or "_No specific feedback - please try again with fresh perspective_"}
+
+## Context from Slack/GDrive/Documents
+{context}
+
+## Codebase Analysis
+{code_analysis}
+
+---
+
+The user has requested a retry with the feedback above. Write an IMPROVED issue description that:
+- Addresses their feedback/concerns
+- Incorporates any additional details they mentioned
+- Keeps the good parts from the previous version
+- Fixes any issues they pointed out
+
+Include:
 - Problem statement: what needs to be done
 - Context: relevant background from the research above
 - Technical details: file paths, code references, error messages
