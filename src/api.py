@@ -20,7 +20,12 @@ from src.tracing import ConsoleTracer
 add_trace_processor(ConsoleTracer())
 
 from src.linear import update_issue_description, add_comment, get_issue
-from src.agents import context_researcher, code_researcher, issue_writer
+from src.agents import (
+    create_context_researcher,
+    create_code_researcher,
+    create_issue_writer,
+    parse_model_tag,
+)
 from src.sync import sync_all_async
 from src.tools import set_repos_base_dir, clear_cloned_repos
 from agents import Runner
@@ -227,8 +232,12 @@ async def _handle_comment_create(data: dict, background_tasks: BackgroundTasks):
     # Extract feedback after /retry
     feedback = comment_body.strip()[6:].strip()  # Remove "/retry" prefix
     
+    # Parse model selection from comment (e.g., "/retry [model=opus] please try again")
+    model_shorthand = parse_model_tag(feedback)
+    
     print(f"", flush=True)
     print(f"▶ [WH] RETRY REQUESTED for issue {issue_id}", flush=True)
+    print(f"       Model: {model_shorthand or 'default'}", flush=True)
     if feedback:
         print(f"       Feedback: {feedback[:60]}...", flush=True)
     
@@ -236,9 +245,9 @@ async def _handle_comment_create(data: dict, background_tasks: BackgroundTasks):
     _mark_as_processed(issue_id)
     
     # Queue retry in background
-    background_tasks.add_task(retry_enhance_issue, issue_id, feedback)
+    background_tasks.add_task(retry_enhance_issue, issue_id, feedback, model_shorthand)
     
-    return {"status": "queued", "action": "retry", "issue_id": issue_id}
+    return {"status": "queued", "action": "retry", "issue_id": issue_id, "model": model_shorthand or "default"}
 
 
 async def _handle_issue_create(data: dict, background_tasks: BackgroundTasks):
@@ -274,17 +283,20 @@ async def _handle_issue_create(data: dict, background_tasks: BackgroundTasks):
         print(f"· [WH] Issue/create \"{title[:40]}\" → skipped (skip tag)", flush=True)
         return {"status": "skipped", "reason": "Skip tag present"}
     
+    # Parse model selection from description
+    model_shorthand = parse_model_tag(description)
+    
     # Mark as processing to prevent loops
     _mark_as_processed(issue_id)
     
     print(f"", flush=True)
     print(f"▶ [WH] PROCESSING: \"{title}\"", flush=True)
-    print(f"       ID: {issue_id} | Desc: {desc_len} chars", flush=True)
+    print(f"       ID: {issue_id} | Desc: {desc_len} chars | Model: {model_shorthand or 'default'}", flush=True)
     
     # Queue enhancement in background
-    background_tasks.add_task(enhance_issue, issue_id, title, description, project_name, team_name)
+    background_tasks.add_task(enhance_issue, issue_id, title, description, project_name, team_name, model_shorthand)
     
-    return {"status": "queued", "issue_id": issue_id}
+    return {"status": "queued", "issue_id": issue_id, "model": model_shorthand or "default"}
 
 
 async def enhance_issue(
@@ -293,12 +305,14 @@ async def enhance_issue(
     existing_description: str,
     project_name: str | None = None,
     team_name: str | None = None,
+    model_shorthand: str | None = None,
 ):
     """Enhance an issue with AI-researched context."""
     print(f"\n{'='*60}", flush=True)
     print(f"🔍 Enhancing issue: {title}", flush=True)
     if project_name:
         print(f"   Project: {project_name}", flush=True)
+    print(f"   Model: {model_shorthand or 'default'}", flush=True)
     print(f"{'='*60}\n", flush=True)
     
     # Add "working on it" comment - if this fails, the issue was likely deleted
@@ -327,7 +341,7 @@ async def enhance_issue(
         # Step 1: Research context from Slack/GDrive FIRST
         print("🔬 Step 1: Researching context (Slack/GDrive)...", flush=True)
         try:
-            context = await _research_context(prompt)
+            context = await _research_context(prompt, model_shorthand)
         except Exception as e:
             print(f"⚠️ Context research error: {e}", flush=True)
             context = f"Error researching context: {e}"
@@ -336,14 +350,14 @@ async def enhance_issue(
         print("🔬 Step 2: Researching codebase (with context)...", flush=True)
         with tempfile.TemporaryDirectory() as work_dir:
             try:
-                code_analysis = await _research_codebase(prompt, context, work_dir)
+                code_analysis = await _research_codebase(prompt, context, work_dir, model_shorthand)
             except Exception as e:
                 print(f"⚠️ Code research error: {e}", flush=True)
                 code_analysis = f"Error researching code: {e}"
         
         # Generate enhanced description
         print("✍️ Writing enhanced description...", flush=True)
-        enhanced = await _write_enhanced_description(title, existing_description, context, code_analysis)
+        enhanced = await _write_enhanced_description(title, existing_description, context, code_analysis, model_shorthand)
         
         # Add markers (includes original description for retry)
         markers = _build_enhancement_markers(existing_description)
@@ -367,10 +381,11 @@ async def enhance_issue(
         await add_comment(issue_id, f"❌ _Enhancement failed: {e}_")
 
 
-async def retry_enhance_issue(issue_id: str, feedback: str):
+async def retry_enhance_issue(issue_id: str, feedback: str, model_shorthand: str | None = None):
     """Retry enhancing an issue based on user feedback."""
     print(f"\n{'='*60}", flush=True)
     print(f"🔄 Retrying enhancement for issue: {issue_id}", flush=True)
+    print(f"   Model: {model_shorthand or 'default'}", flush=True)
     print(f"{'='*60}\n", flush=True)
     
     # Fetch current issue data
@@ -416,7 +431,7 @@ async def retry_enhance_issue(issue_id: str, feedback: str):
         # Research context
         print("🔬 Step 1: Researching context (Slack/GDrive)...", flush=True)
         try:
-            context = await _research_context(prompt)
+            context = await _research_context(prompt, model_shorthand)
         except Exception as e:
             print(f"⚠️ Context research error: {e}", flush=True)
             context = f"Error researching context: {e}"
@@ -425,7 +440,7 @@ async def retry_enhance_issue(issue_id: str, feedback: str):
         print("🔬 Step 2: Researching codebase (with context)...", flush=True)
         with tempfile.TemporaryDirectory() as work_dir:
             try:
-                code_analysis = await _research_codebase(prompt, context, work_dir)
+                code_analysis = await _research_codebase(prompt, context, work_dir, model_shorthand)
             except Exception as e:
                 print(f"⚠️ Code research error: {e}", flush=True)
                 code_analysis = f"Error researching code: {e}"
@@ -433,7 +448,7 @@ async def retry_enhance_issue(issue_id: str, feedback: str):
         # Generate new description with feedback context
         print("✍️ Writing enhanced description (with feedback)...", flush=True)
         enhanced = await _write_retry_description(
-            title, original_description, ai_description, feedback, context, code_analysis
+            title, original_description, ai_description, feedback, context, code_analysis, model_shorthand
         )
         
         # Add markers (preserve original description for future retries)
@@ -458,25 +473,27 @@ async def retry_enhance_issue(issue_id: str, feedback: str):
         await add_comment(issue_id, f"❌ _Retry enhancement failed: {e}_")
 
 
-async def _research_context(prompt: str) -> str:
+async def _research_context(prompt: str, model_shorthand: str | None = None) -> str:
     """Research context from Slack/GDrive."""
+    agent = create_context_researcher(model_shorthand)
     result = await Runner.run(
-        context_researcher,
+        agent,
         f"Find all context relevant to this issue:\n\n{prompt}\n\nSearch in: {DOCS_DIR}",
         max_turns=MAX_TURNS,
     )
     return str(result.final_output)
 
 
-async def _research_codebase(prompt: str, context: str, work_dir: str) -> str:
+async def _research_codebase(prompt: str, context: str, work_dir: str, model_shorthand: str | None = None) -> str:
     """Research the codebase, informed by context from Slack/GDrive."""
     # Set up the repos directory and clear any previous state
     repos_dir = os.path.join(work_dir, "repos")
     clear_cloned_repos()
     set_repos_base_dir(repos_dir)
     
+    agent = create_code_researcher(model_shorthand)
     result = await Runner.run(
-        code_researcher,
+        agent,
         f"""Analyze the codebase for the following issue:
 
 ## Issue
@@ -513,10 +530,12 @@ async def _write_enhanced_description(
     existing: str,
     context: str,
     code_analysis: str,
+    model_shorthand: str | None = None,
 ) -> str:
     """Generate an enhanced issue description."""
+    agent = create_issue_writer(model_shorthand)
     result = await Runner.run(
-        issue_writer,
+        agent,
         f"""Write an enhanced Linear issue description based on:
 
 ## Issue Title
@@ -559,10 +578,12 @@ async def _write_retry_description(
     feedback: str,
     context: str,
     code_analysis: str,
+    model_shorthand: str | None = None,
 ) -> str:
     """Generate a new description based on user feedback about previous attempt."""
+    agent = create_issue_writer(model_shorthand)
     result = await Runner.run(
-        issue_writer,
+        agent,
         f"""Rewrite an enhanced Linear issue description based on user feedback:
 
 ## Issue Title

@@ -1,11 +1,8 @@
 from agents import Agent
 
-from src.agents.model import get_model
+from src.agents.model import get_model_config
 
-issue_writer = Agent(
-    name="IssueWriter",
-    model=get_model(),
-    instructions="""You write comprehensive Linear issue descriptions based on research context.
+ISSUE_WRITER_INSTRUCTIONS = """You write comprehensive Linear issue descriptions based on research context.
 
 ## Your Role
 You are a technical writer. Your job is to DESCRIBE the problem clearly, not to solve it.
@@ -38,5 +35,19 @@ At the very end of your output, include a repository tag only for the repo you b
 Extract repository names from the codebase analysis (look for "Repositories:" section listing analyzed repos).
 - If only ONE repo is relevant, include just that one tag
 
-These tags MUST be the last lines of your output and PERFECTLY match the above format.""",
-)
+These tags MUST be the last lines of your output and PERFECTLY match the above format."""
+
+
+def create_issue_writer(model_shorthand: str | None = None) -> Agent:
+    """Create an issue writer agent with the specified model."""
+    config = get_model_config(model_shorthand)
+    return Agent(
+        name="IssueWriter",
+        model=config.model,
+        model_settings=config.model_settings,
+        instructions=ISSUE_WRITER_INSTRUCTIONS,
+    )
+
+
+# Default instance for backwards compatibility
+issue_writer = create_issue_writer()

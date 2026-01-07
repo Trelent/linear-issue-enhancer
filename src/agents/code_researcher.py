@@ -1,6 +1,6 @@
 from agents import Agent
 
-from src.agents.model import get_model
+from src.agents.model import get_model_config
 from src.tools import (
     grep_files,
     read_file_content,
@@ -14,10 +14,7 @@ from src.tools import (
     get_pr_details,
 )
 
-code_researcher = Agent(
-    name="CodeResearcher",
-    model=get_model(),
-    instructions="""You analyze GitHub repositories to understand their structure and 
+CODE_RESEARCHER_INSTRUCTIONS = """You analyze GitHub repositories to understand their structure and 
 find code relevant to an issue. You can work with MULTIPLE repositories simultaneously.
 
 ## Capabilities
@@ -68,20 +65,36 @@ IMPORTANT: List ALL analyzed repositories at the start:
 **Repositories:**
 - `owner/repo1`
 - `owner/repo2`
-- ...""",
-    tools=[
-        # GitHub discovery
-        list_github_repos,
-        get_repo_info,
-        list_repo_branches,
-        # Pull requests
-        list_prs,
-        get_pr_details,
-        # Repository operations
-        clone_repo,
-        list_cloned_repos,
-        list_directory,
-        grep_files,
-        read_file_content,
-    ],
-)
+- ..."""
+
+CODE_RESEARCHER_TOOLS = [
+    # GitHub discovery
+    list_github_repos,
+    get_repo_info,
+    list_repo_branches,
+    # Pull requests
+    list_prs,
+    get_pr_details,
+    # Repository operations
+    clone_repo,
+    list_cloned_repos,
+    list_directory,
+    grep_files,
+    read_file_content,
+]
+
+
+def create_code_researcher(model_shorthand: str | None = None) -> Agent:
+    """Create a code researcher agent with the specified model."""
+    config = get_model_config(model_shorthand)
+    return Agent(
+        name="CodeResearcher",
+        model=config.model,
+        model_settings=config.model_settings,
+        instructions=CODE_RESEARCHER_INSTRUCTIONS,
+        tools=CODE_RESEARCHER_TOOLS,
+    )
+
+
+# Default instance for backwards compatibility
+code_researcher = create_code_researcher()
