@@ -9,6 +9,29 @@ from src.github_cache import get_repos, format_repos_markdown
 
 
 # -----------------------------------------------------------------------------
+# Multi-Repo Registry
+# -----------------------------------------------------------------------------
+
+# Global registry tracking cloned repos: {repo_name: path}
+_cloned_repos: dict[str, str] = {}
+
+
+def get_cloned_repos() -> dict[str, str]:
+    """Get the current registry of cloned repos."""
+    return _cloned_repos.copy()
+
+
+def clear_cloned_repos():
+    """Clear the registry (useful between runs)."""
+    _cloned_repos.clear()
+
+
+def _register_repo(repo: str, path: str):
+    """Register a cloned repo in the registry."""
+    _cloned_repos[repo] = path
+
+
+# -----------------------------------------------------------------------------
 # GitHub CLI Tools
 # -----------------------------------------------------------------------------
 
@@ -396,16 +419,74 @@ def list_directory(directory: str) -> str:
 # Git Tools
 # -----------------------------------------------------------------------------
 
+# Base directory for cloned repos (set by main.py before agent runs)
+_repos_base_dir: str = ""
+
+
+def set_repos_base_dir(path: str):
+    """Set the base directory for cloning repos."""
+    global _repos_base_dir
+    _repos_base_dir = path
+    Path(path).mkdir(parents=True, exist_ok=True)
+
+
+def get_repos_base_dir() -> str:
+    """Get the base directory for cloned repos."""
+    return _repos_base_dir
+
+
 @function_tool
-def clone_repo(repo: str, target_dir: str, branch: str = "") -> str:
-    """Clone a GitHub repository.
+def list_cloned_repos() -> str:
+    """List all repositories that have been cloned in this session.
+    
+    Returns a table showing each repo and its local path, which you can use
+    for file operations like grep_files, list_directory, and read_file_content.
+    """
+    if not _cloned_repos:
+        return "## Cloned Repositories\n\nNo repositories have been cloned yet. Use `clone_repo` to clone one."
+    
+    lines = [
+        "## Cloned Repositories",
+        "",
+        f"**{len(_cloned_repos)}** repositories available:",
+        "",
+        "| Repository | Local Path |",
+        "|------------|------------|",
+    ]
+    for repo, path in _cloned_repos.items():
+        lines.append(f"| `{repo}` | `{path}` |")
+    
+    lines.extend([
+        "",
+        "_Use these paths with `grep_files`, `list_directory`, and `read_file_content`._"
+    ])
+    return "\n".join(lines)
+
+
+@function_tool
+def clone_repo(repo: str, branch: str = "") -> str:
+    """Clone a GitHub repository to a unique directory.
+    
+    The repo will be cloned to a predictable location based on its name.
+    After cloning, use `list_cloned_repos` to see all available repos and their paths.
 
     Args:
-        repo: The repository URL or owner/repo format (e.g., Trelent/backend).
-        target_dir: The directory to clone into.
+        repo: The repository in owner/repo format (e.g., Trelent/backend).
         branch: Specific branch to clone (default: repo's default branch).
     """
     import os
+    
+    if not _repos_base_dir:
+        return "## ❌ Error\n\nRepos base directory not configured. This is a system error."
+    
+    # Check if already cloned
+    if repo in _cloned_repos:
+        existing_path = _cloned_repos[repo]
+        return f"## ℹ️ Already Cloned\n\n`{repo}` is already available at `{existing_path}`.\n\nUse file tools to explore it."
+    
+    # Create unique directory name from repo
+    safe_name = repo.replace("/", "-").replace("\\", "-")
+    target_dir = str(Path(_repos_base_dir) / safe_name)
     
     if Path(target_dir).exists():
         shutil.rmtree(target_dir)
@@ -415,7 +496,6 @@ def clone_repo(repo: str, target_dir: str, branch: str = "") -> str:
     if repo.startswith("http"):
         repo_url = repo
     elif gh_token:
-        # Use token for private repo access
         repo_url = f"https://{gh_token}@github.com/{repo}.git"
     else:
         repo_url = f"https://github.com/{repo}"
@@ -427,17 +507,21 @@ def clone_repo(repo: str, target_dir: str, branch: str = "") -> str:
 
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
     if result.returncode != 0:
-        # Redact token from error message if present
         stderr = result.stderr.strip()
         if gh_token:
             stderr = stderr.replace(gh_token, "[REDACTED]")
         return f"## ❌ Clone Failed\n\nRepository: `{repo}`\nBranch: `{branch or 'default'}`\n\n```\n{stderr}\n```\n\n_Hint: Check GH_TOKEN is set and has repo access._"
 
-    # Get some info about what was cloned
+    # Register in our tracking
+    _register_repo(repo, target_dir)
+    
     cloned_path = Path(target_dir)
     file_count = sum(1 for _ in cloned_path.rglob("*") if _.is_file())
     dir_count = sum(1 for _ in cloned_path.rglob("*") if _.is_dir())
 
+    # Show other cloned repos for context
+    other_repos = [r for r in _cloned_repos if r != repo]
+    
     lines = [
         f"## ✅ Repository Cloned",
         "",
@@ -448,5 +532,10 @@ def clone_repo(repo: str, target_dir: str, branch: str = "") -> str:
         f"| **Location** | `{target_dir}` |",
         f"| **Files** | {file_count} |",
         f"| **Directories** | {dir_count} |",
+        "",
     ]
+    
+    if other_repos:
+        lines.append(f"_Also available: {', '.join(f'`{r}`' for r in other_repos)}_")
+    
     return "\n".join(lines)

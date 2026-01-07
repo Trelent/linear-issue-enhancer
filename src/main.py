@@ -14,6 +14,7 @@ add_trace_processor(ConsoleTracer())
 
 from src.agents import context_researcher, code_researcher, issue_writer
 from src.sync import sync_all, sync_all_async, needs_sync
+from src.tools import set_repos_base_dir, clear_cloned_repos
 
 
 MAX_TURNS = 250
@@ -37,22 +38,28 @@ async def research_codebase(
     work_dir: str,
 ) -> str:
     """Research the codebase, informed by context from Slack/GDrive."""
-    repo_dir = os.path.join(work_dir, "repo")
+    # Set up the repos directory and clear any previous state
+    repos_dir = os.path.join(work_dir, "repos")
+    clear_cloned_repos()
+    set_repos_base_dir(repos_dir)
 
     if repo:
-        clone_instruction = f"""Clone the repository: `{repo}`
-Target directory: `{repo_dir}`"""
+        clone_instruction = f"""Clone the repository: `{repo}`"""
         if branch:
             clone_instruction += f"\nBranch: `{branch}`"
+        clone_instruction += "\n\nIf you discover other relevant repos during your analysis, clone them too."
     else:
-        clone_instruction = f"""1. **Discover repos**: Use `list_github_repos` to see available repositories
-2. **Identify the right repo**: Based on the issue and context above
-3. **Check for relevant PRs**: Use `list_prs` to see if any open PRs relate to this issue
-4. **Determine the right branch**: 
+        clone_instruction = """1. **Discover repos**: Use `list_github_repos` to see available repositories
+2. **Identify ALL relevant repos**: Based on the issue and context, there may be multiple repos involved
+   (e.g., frontend + backend, shared libs, infrastructure)
+3. **Check for relevant PRs**: Use `list_prs` on each relevant repo
+4. **Determine the right branch** for each repo:
    - If context mentions a specific branch (e.g. "on dev", "in feature-x"), use `list_repo_branches` to find it
    - If a PR is relevant, use `get_pr_details` to inspect it and consider cloning its branch
    - Otherwise, use the repo's default branch
-5. **Clone and analyze**: Clone to `{repo_dir}` with the appropriate branch"""
+5. **Clone ALL relevant repos**: Each clone goes to a unique directory automatically
+6. **Use `list_cloned_repos`** to see all cloned repos and their paths
+7. **Cross-reference**: Search for relevant code across all cloned repos"""
 
     result = await Runner.run(
         code_researcher,
@@ -68,7 +75,10 @@ Target directory: `{repo_dir}`"""
 {clone_instruction}
 
 Pay attention to any branch names, PR references, or environment mentions in the context above.
-Find all relevant code, files, and implementation details.""",
+Find all relevant code, files, and implementation details.
+
+**IMPORTANT**: If this issue involves multiple repositories (frontend/backend, shared libs, etc.), 
+clone and analyze ALL of them. Use `list_cloned_repos` to track what you've cloned.""",
         max_turns=MAX_TURNS,
     )
     return str(result.final_output)

@@ -25,12 +25,18 @@ The developer assigned to this issue will decide how to approach the solution.
 - DO NOT plan the work - just describe what needs to happen
 
 ## Format
-Write in clear Markdown. Be concise but thorough. Let the context speak for itself. Link to relevant files/resources directly rather than describing them.
+Write in clear Markdown. Be concise but thorough. Let the context speak for itself. Link to relevant files/resources directly rather than describing them or using code snippets. Generally keep the output to a couple paragraphs.
 
 ## Repository Tag (REQUIRED)
-At the very end of your output, on its own line, include the repository tag:
-`[repo=owner/repository]`
 
-Extract the repository name from the codebase analysis (it will be mentioned as "Repository: owner/repo").
-This tag MUST be the last line of your output and PERFECTLY match the above format (including the `[repo=...]` prefix).""",
+At the very end of your output, include a repository tag only for the repo you believe the work needs to happen within (not necessarily the one you are finding relevant details in).
+
+```
+[repo=owner/repository]
+```
+
+Extract repository names from the codebase analysis (look for "Repositories:" section listing analyzed repos).
+- If only ONE repo is relevant, include just that one tag
+
+These tags MUST be the last lines of your output and PERFECTLY match the above format.""",
 )
