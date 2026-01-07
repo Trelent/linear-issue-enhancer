@@ -195,10 +195,10 @@ async def linear_webhook(request: Request, background_tasks: BackgroundTasks):
         print(f"· [WH] Issue/create \"{title[:40]}\" → skipped (already enhanced)", flush=True)
         return {"status": "skipped", "reason": "Already enhanced"}
     
-    # Skip if description is already substantial (> 1000 chars)
-    if desc_len > 1000:
-        print(f"· [WH] Issue/create \"{title[:40]}\" → skipped (desc {desc_len} chars)", flush=True)
-        return {"status": "skipped", "reason": "Issue already has substantial description"}
+    # Skip if explicitly tagged to skip
+    if "[skip=true]" in description:
+        print(f"· [WH] Issue/create \"{title[:40]}\" → skipped (skip tag)", flush=True)
+        return {"status": "skipped", "reason": "Skip tag present"}
     
     # Mark as processing to prevent loops
     _mark_as_processed(issue_id)
