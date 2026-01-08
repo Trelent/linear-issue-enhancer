@@ -54,6 +54,7 @@ def get_model_config(shorthand: str | None = None) -> ModelConfig:
     
     return ModelConfig(
         model=LitellmModel(model=model_id, api_key=api_key),
+        model_settings=ModelSettings(),
     )
 
 
