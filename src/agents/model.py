@@ -10,10 +10,10 @@ from openai.types.shared import Reasoning
 
 # Model shorthand mapping (value is model ID, or None for native OpenAI models)
 MODEL_MAP = {
-    "sonnet": "anthropic/claude-sonnet-4-5-20250514",
-    "haiku": "anthropic/claude-haiku-4-5-20250514",
+    "sonnet": "anthropic/claude-sonnet-4-5-20250929",
+    "haiku": "anthropic/claude-haiku-4-5-20251001",
     "opus": "anthropic/claude-opus-4-5-20251101",
-    "gpt": "gpt-5.2",  # Native OpenAI model
+    "gpt": "openai/gpt-5.2",
 }
 
 # Models that use native OpenAI (not LiteLLM)
