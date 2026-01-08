@@ -17,6 +17,16 @@ When you create an issue in Linear with just a title (or minimal description), t
 2. Analyzes relevant GitHub repositories
 3. Updates the issue with a comprehensive description
 
+#### Retry Enhancement
+
+If you're not happy with the result, comment `/retry` on the issue to re-run the enhancement:
+
+```
+/retry please focus more on the authentication flow
+```
+
+You can also specify a model: `/retry [model=opus] try again with more detail`
+
 ### CLI Mode
 
 Create an issue manually:
@@ -71,7 +81,8 @@ gh auth login
 4. Expose via ngrok or deploy: `ngrok http 8000`
 5. In Linear: **Settings → API → Webhooks → New webhook**
    - URL: `https://your-domain.ngrok.io/webhook/linear`
-   - Data change: `Issue` → `Create`
+   - Data change: `Issue` → `Create` (for auto-enhancement)
+   - Data change: `Comment` → `Create` (for `/retry` command)
 
 ### Optional: Google Drive
 

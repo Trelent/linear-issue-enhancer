@@ -220,13 +220,17 @@ async def _handle_comment_create(data: dict, background_tasks: BackgroundTasks):
     comment_body = data.get("body") or ""
     issue_data = data.get("issue", {})
     issue_id = issue_data.get("id")
+    issue_identifier = issue_data.get("identifier", "?")
+    
+    print(f"· [WH] Comment/create on {issue_identifier}: \"{comment_body[:50]}{'...' if len(comment_body) > 50 else ''}\"", flush=True)
     
     if not issue_id:
-        print(f"· [WH] Comment/create but missing issue ID → ignored", flush=True)
+        print(f"  → Missing issue ID in payload, ignored", flush=True)
         return {"status": "ignored", "reason": "Missing issue ID in comment"}
     
     # Check for /retry command
     if not comment_body.strip().startswith("/retry"):
+        print(f"  → Not a /retry command, ignored", flush=True)
         return {"status": "ignored", "reason": "Not a /retry command"}
     
     # Extract feedback after /retry
@@ -378,7 +382,7 @@ async def enhance_issue(
         print(f"❌ Enhancement failed with error: {e}", flush=True)
         import traceback
         traceback.print_exc()
-        await add_comment(issue_id, f"❌ _Enhancement failed: {e}_")
+        await add_comment(issue_id, "❌ _Enhancement failed during issue processing. Please check server logs for details._")
 
 
 async def retry_enhance_issue(issue_id: str, feedback: str, model_shorthand: str | None = None):
@@ -470,7 +474,7 @@ async def retry_enhance_issue(issue_id: str, feedback: str, model_shorthand: str
         print(f"❌ Retry enhancement failed with error: {e}", flush=True)
         import traceback
         traceback.print_exc()
-        await add_comment(issue_id, f"❌ _Retry enhancement failed: {e}_")
+        await add_comment(issue_id, "❌ _Retry enhancement failed during issue processing. Please check server logs for details._")
 
 
 async def _research_context(prompt: str, model_shorthand: str | None = None) -> str:
