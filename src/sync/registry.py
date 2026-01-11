@@ -9,11 +9,13 @@ def get_all_connectors() -> list[Connector]:
     from .connectors.slack import SlackConnector
     from .connectors.gdrive import GDriveConnector
     from .connectors.github import GitHubConnector
+    from .connectors.gmail import GmailConnector
     
     return [
         SlackConnector(),
         GDriveConnector(),
         GitHubConnector(),
+        GmailConnector(),
     ]
 
 

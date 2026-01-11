@@ -161,6 +161,25 @@ async def _run_in_executor(func, *args, **kwargs):
     return await loop.run_in_executor(None, partial(func, *args, **kwargs))
 
 
+async def _call_with_retry(func, rate_limiter: RateLimiter, max_retries: int = 3):
+    """Call a Slack API function with retry on rate limit."""
+    for attempt in range(max_retries):
+        await rate_limiter.acquire()
+        try:
+            return await _run_in_executor(func)
+        except SlackApiError as e:
+            if e.response.get("error") == "ratelimited":
+                # Get retry-after header or use exponential backoff
+                retry_after = int(e.response.headers.get("Retry-After", 2 ** attempt))
+                print(f"  ⏳ Rate limited, waiting {retry_after}s...")
+                await asyncio.sleep(retry_after)
+                continue
+            raise
+    # Final attempt
+    await rate_limiter.acquire()
+    return await _run_in_executor(func)
+
+
 def _get_conversation_name(channel: dict) -> str:
     """Get the display name for a channel or DM."""
     if channel.get("is_im"):
@@ -216,23 +235,17 @@ async def _get_channels_async(
 ) -> list:
     """Get list of channels and DMs the bot has access to."""
     try:
-        await rate_limiter.acquire()
-        result = await _run_in_executor(
-            lambda: client.conversations_list(types="public_channel,private_channel,im,mpim", limit=999)
+        result = await _call_with_retry(
+            lambda: client.conversations_list(types="public_channel,private_channel,im,mpim", limit=999),
+            rate_limiter,
         )
         conversations = result.get("channels", [])
         
-        dm_tasks = []
-        dm_indices = []
-        for i, conv in enumerate(conversations):
+        # Resolve DM user names sequentially to avoid rate limits
+        for conv in conversations:
             if conv.get("is_im") and conv.get("user"):
-                dm_tasks.append(_get_user_info_async(client, conv["user"], users, users_lock, rate_limiter))
-                dm_indices.append(i)
-        
-        if dm_tasks:
-            dm_results = await asyncio.gather(*dm_tasks)
-            for idx, user_info in zip(dm_indices, dm_results):
-                conversations[idx]["_dm_user_name"] = user_info["name"]
+                user_info = await _get_user_info_async(client, conv["user"], users, users_lock, rate_limiter)
+                conv["_dm_user_name"] = user_info["name"]
         
         return conversations
     except SlackApiError as e:
@@ -249,8 +262,7 @@ async def _get_user_info_async(
             return users[user_id]
     
     try:
-        await rate_limiter.acquire()
-        result = await _run_in_executor(lambda: client.users_info(user=user_id))
+        result = await _call_with_retry(lambda: client.users_info(user=user_id), rate_limiter)
         user = result.get("user", {})
         profile = user.get("profile", {})
         email = profile.get("email", "")
@@ -278,38 +290,32 @@ async def _get_messages_with_threads_async(
 ) -> tuple[list, str]:
     """Get messages and their thread replies."""
     try:
-        await rate_limiter.acquire()
-        result = await _run_in_executor(
-            lambda: client.conversations_history(channel=channel_id, oldest=oldest, limit=999)
+        result = await _call_with_retry(
+            lambda: client.conversations_history(channel=channel_id, oldest=oldest, limit=999),
+            rate_limiter,
         )
         messages = result.get("messages", [])
         
         if not messages:
             return [], oldest
         
-        thread_tasks = []
-        thread_indices = []
-        
-        for i, msg in enumerate(messages):
+        # Fetch thread replies sequentially to avoid rate limits
+        thread_replies = {}
+        for msg in messages:
             if msg.get("thread_ts") == msg["ts"] and msg.get("reply_count", 0) > 0:
-                thread_tasks.append(
-                    _get_thread_replies_async(client, channel_id, msg["ts"], users, users_lock, rate_limiter, oldest)
+                replies = await _get_thread_replies_async(
+                    client, channel_id, msg["ts"], users, users_lock, rate_limiter, oldest
                 )
-                thread_indices.append(i)
+                thread_replies[msg["ts"]] = replies
         
-        thread_results = await asyncio.gather(*thread_tasks) if thread_tasks else []
-        
+        # Fetch user info for users not in cache (sequentially)
         user_ids = list(set(msg.get("user", "") for msg in messages if msg.get("user")))
-        await asyncio.gather(*[
-            _get_user_info_async(client, uid, users, users_lock, rate_limiter)
-            for uid in user_ids
-            if uid not in users
-        ])
+        for uid in user_ids:
+            if uid not in users:
+                await _get_user_info_async(client, uid, users, users_lock, rate_limiter)
         
         enriched = []
-        thread_result_map = dict(zip(thread_indices, thread_results))
-        
-        for i, msg in enumerate(messages):
+        for msg in messages:
             user_id = msg.get("user", "")
             user_info = users.get(user_id, {"name": user_id, "email": "", "is_internal": False})
             
@@ -317,7 +323,7 @@ async def _get_messages_with_threads_async(
                 "ts": msg["ts"],
                 "text": msg.get("text", ""),
                 "user": user_info,
-                "replies": thread_result_map.get(i, []),
+                "replies": thread_replies.get(msg["ts"], []),
             })
         
         latest_ts = max(m["ts"] for m in messages)
@@ -338,20 +344,19 @@ async def _get_thread_replies_async(
 ) -> list:
     """Get replies in a thread, excluding the parent message."""
     try:
-        await rate_limiter.acquire()
-        result = await _run_in_executor(
-            lambda: client.conversations_replies(channel=channel_id, ts=thread_ts, oldest=oldest, limit=100)
+        result = await _call_with_retry(
+            lambda: client.conversations_replies(channel=channel_id, ts=thread_ts, oldest=oldest, limit=100),
+            rate_limiter,
         )
         replies = result.get("messages", [])[1:]
         
         valid_replies = [r for r in replies if float(r["ts"]) > float(oldest)]
-        user_ids = list(set(r.get("user", "") for r in valid_replies if r.get("user")))
         
-        await asyncio.gather(*[
-            _get_user_info_async(client, uid, users, users_lock, rate_limiter)
-            for uid in user_ids
-            if uid not in users
-        ])
+        # Fetch user info sequentially
+        for r in valid_replies:
+            uid = r.get("user", "")
+            if uid and uid not in users:
+                await _get_user_info_async(client, uid, users, users_lock, rate_limiter)
         
         enriched = []
         for reply in valid_replies:
