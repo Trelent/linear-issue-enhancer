@@ -392,11 +392,21 @@ async def retry_enhance_issue(issue_id: str, feedback: str, model_shorthand: str
     print(f"   Model: {model_shorthand or 'default'}", flush=True)
     print(f"{'='*60}\n", flush=True)
     
+    # Add "working on it" comment immediately
+    try:
+        await add_comment(issue_id, "🔄 _Retrying enhancement with your feedback..._")
+    except Exception as e:
+        if "Entity not found" in str(e) or "not found" in str(e).lower():
+            print(f"⚠️ Issue {issue_id} no longer exists, skipping retry", flush=True)
+            return
+        raise
+    
     # Fetch current issue data
     try:
         issue = await get_issue(issue_id)
     except Exception as e:
         print(f"❌ Failed to fetch issue: {e}", flush=True)
+        await add_comment(issue_id, "❌ _Failed to fetch issue data. Please check server logs for details._")
         return
     
     current_description = issue.description or ""
@@ -418,9 +428,6 @@ async def retry_enhance_issue(issue_id: str, feedback: str, model_shorthand: str
     print(f"   Original: {len(original_description)} chars", flush=True)
     print(f"   AI version: {len(ai_description)} chars", flush=True)
     print(f"   Feedback: {feedback[:100]}..." if len(feedback) > 100 else f"   Feedback: {feedback}", flush=True)
-    
-    # Add "working on it" comment
-    await add_comment(issue_id, "🔄 _Retrying enhancement with your feedback..._")
     
     try:
         # Build prompt from title and original description
