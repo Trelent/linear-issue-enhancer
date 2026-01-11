@@ -38,6 +38,10 @@ SYNC_INTERVAL_HOURS = int(os.getenv("SYNC_INTERVAL_HOURS", "1"))
 SLACK_TOKEN = os.getenv("SLACK_TOKEN")
 GDRIVE_CREDS = os.getenv("GDRIVE_CREDS")
 
+# Comma-separated list of Linear project names to exclude from enhancement
+_excluded_projects_raw = os.getenv("LINEAR_EXCLUDED_PROJECTS", "")
+LINEAR_EXCLUDED_PROJECTS = {p.strip().lower() for p in _excluded_projects_raw.split(",") if p.strip()}
+
 # For deployed environments: decode base64 gdrive creds to a temp file
 if not GDRIVE_CREDS and os.getenv("GDRIVE_CREDS_BASE64"):
     import base64
@@ -83,6 +87,8 @@ async def lifespan(app: FastAPI):
     print("🚀 Linear Enhancer API starting...", flush=True)
     print(f"   Slack token: {'✓' if SLACK_TOKEN else '✗ (not set)'}", flush=True)
     print(f"   GDrive creds: {'✓' if GDRIVE_CREDS else '✗ (not set)'}", flush=True)
+    if LINEAR_EXCLUDED_PROJECTS:
+        print(f"   Excluded projects: {', '.join(sorted(LINEAR_EXCLUDED_PROJECTS))}", flush=True)
     
     # Run initial sync on boot
     print("📥 Running initial sync on boot...", flush=True)
@@ -286,6 +292,11 @@ async def _handle_issue_create(data: dict, background_tasks: BackgroundTasks):
     if "[skip=true]" in description:
         print(f"· [WH] Issue/create \"{title[:40]}\" → skipped (skip tag)", flush=True)
         return {"status": "skipped", "reason": "Skip tag present"}
+    
+    # Skip if project is in exclusion list
+    if project_name and project_name.lower() in LINEAR_EXCLUDED_PROJECTS:
+        print(f"· [WH] Issue/create \"{title[:40]}\" → skipped (excluded project: {project_name})", flush=True)
+        return {"status": "skipped", "reason": f"Project '{project_name}' is excluded"}
     
     # Parse model selection from description
     model_shorthand = parse_model_tag(description)
