@@ -26,7 +26,7 @@ from src.agents import (
     create_issue_writer,
     parse_model_tag,
 )
-from src.sync import sync_all_async
+from src.sync import sync_all_async, print_connector_status
 from src.tools import set_repos_base_dir, clear_cloned_repos
 from agents import Runner
 
@@ -35,23 +35,10 @@ MAX_TURNS = 250
 DOCS_DIR = os.getenv("DOCS_DIR", "./data")
 LINEAR_WEBHOOK_SECRET = os.getenv("LINEAR_WEBHOOK_SECRET")
 SYNC_INTERVAL_HOURS = int(os.getenv("SYNC_INTERVAL_HOURS", "1"))
-SLACK_TOKEN = os.getenv("SLACK_TOKEN")
-GDRIVE_CREDS = os.getenv("GDRIVE_CREDS")
 
 # Comma-separated list of Linear project names to exclude from enhancement
 _excluded_projects_raw = os.getenv("LINEAR_EXCLUDED_PROJECTS", "")
 LINEAR_EXCLUDED_PROJECTS = {p.strip().lower() for p in _excluded_projects_raw.split(",") if p.strip()}
-
-# For deployed environments: decode base64 gdrive creds to a temp file
-if not GDRIVE_CREDS and os.getenv("GDRIVE_CREDS_BASE64"):
-    import base64
-    import tempfile
-    creds_json = base64.b64decode(os.getenv("GDRIVE_CREDS_BASE64")).decode()
-    creds_file = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
-    creds_file.write(creds_json)
-    creds_file.close()
-    GDRIVE_CREDS = creds_file.name
-    print(f"📄 GDrive credentials decoded to temp file", flush=True)
 
 # Track recently processed issues to prevent infinite loops
 # Key: issue_id, Value: timestamp
@@ -73,7 +60,7 @@ async def scheduled_sync():
     print("⏰ Scheduled sync starting...", flush=True)
     print(f"{'='*60}\n", flush=True)
     try:
-        await sync_all_async(DOCS_DIR, slack_token=SLACK_TOKEN, gdrive_creds=GDRIVE_CREDS)
+        await sync_all_async(DOCS_DIR)
         print("✅ Scheduled sync complete!", flush=True)
     except Exception as e:
         print(f"❌ Scheduled sync failed: {e}", flush=True)
@@ -85,15 +72,14 @@ async def scheduled_sync():
 async def lifespan(app: FastAPI):
     """App lifespan handler."""
     print("🚀 Linear Enhancer API starting...", flush=True)
-    print(f"   Slack token: {'✓' if SLACK_TOKEN else '✗ (not set)'}", flush=True)
-    print(f"   GDrive creds: {'✓' if GDRIVE_CREDS else '✗ (not set)'}", flush=True)
+    print_connector_status()
     if LINEAR_EXCLUDED_PROJECTS:
         print(f"   Excluded projects: {', '.join(sorted(LINEAR_EXCLUDED_PROJECTS))}", flush=True)
     
     # Run initial sync on boot
     print("📥 Running initial sync on boot...", flush=True)
     try:
-        await sync_all_async(DOCS_DIR, slack_token=SLACK_TOKEN, gdrive_creds=GDRIVE_CREDS)
+        await sync_all_async(DOCS_DIR)
         print("✅ Initial sync complete!", flush=True)
     except Exception as e:
         print(f"⚠️ Initial sync failed: {e}", flush=True)
