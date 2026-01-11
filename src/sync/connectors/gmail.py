@@ -35,9 +35,9 @@ SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 # Labels to exclude
 EXCLUDED_LABELS = {"SPAM", "TRASH", "CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL", "CATEGORY_UPDATES"}
 
-# Rate limiting
+# Rate limiting - keep concurrency low to avoid thread safety issues
 GMAIL_RATE_LIMIT = 5
-GMAIL_CONCURRENT_FETCHES = 5
+GMAIL_CONCURRENT_FETCHES = 1  # Sequential to avoid thread safety issues with Google API client
 
 
 class GmailConnector(Connector):
@@ -70,7 +70,6 @@ class GmailConnector(Connector):
         """Load credentials, build allow-list, and test connection."""
         self._creds = _load_credentials()
         if not self._creds:
-            print(f"  ✗ Gmail: No valid credentials (uses same creds as GDrive)")
             return False
         
         # Build allow-list from env var
@@ -177,15 +176,16 @@ class GmailConnector(Connector):
             return state, ConnectorResult(success=True, items_skipped=0, message="No new messages")
         
         # Fetch full message details and filter by allow-list
+        # Process sequentially to avoid thread safety issues with Google API client
+        print(f"  📧 Gmail: Fetching message details...")
         rate_limiter = RateLimiter(GMAIL_RATE_LIMIT)
-        semaphore = asyncio.Semaphore(GMAIL_CONCURRENT_FETCHES)
         
-        async def process_message(msg_id: str) -> dict | None:
-            async with semaphore:
-                return await _fetch_message(service, msg_id, rate_limiter)
-        
-        tasks = [process_message(m["id"]) for m in messages]
-        fetched = await asyncio.gather(*tasks)
+        fetched = []
+        for i, msg in enumerate(messages):
+            if i > 0 and i % 50 == 0:
+                print(f"  📧 Gmail: Processed {i}/{len(messages)} messages...")
+            msg_data = await _fetch_message(service, msg["id"], rate_limiter)
+            fetched.append(msg_data)
         
         # Filter by allow-list and process
         allowed_messages = []
@@ -383,13 +383,19 @@ def _append_messages_to_md(path: Path, messages: list[dict]):
 def _load_credentials() -> Credentials | None:
     """Load credentials from file path or GDRIVE_CREDS_BASE64 env var."""
     # Gmail uses same creds as GDrive but different scope
+    user_email = os.getenv("GMAIL_USER_EMAIL")
+    
     creds_base64 = os.getenv("GDRIVE_CREDS_BASE64")
     if creds_base64:
         try:
             creds_json = base64.b64decode(creds_base64).decode("utf-8")
             creds_data = json.loads(creds_json)
             if creds_data.get("type") == "service_account":
-                return service_account.Credentials.from_service_account_info(creds_data, scopes=SCOPES)
+                creds = service_account.Credentials.from_service_account_info(creds_data, scopes=SCOPES)
+                if user_email:
+                    return creds.with_subject(user_email)
+                print(f"  ✗ Gmail: Service account requires GMAIL_USER_EMAIL to impersonate a user")
+                return None
             return Credentials.from_authorized_user_info(creds_data, SCOPES)
         except Exception as e:
             print(f"  ✗ Gmail: Failed to load credentials from GDRIVE_CREDS_BASE64: {e}")
@@ -407,7 +413,11 @@ def _load_credentials() -> Credentials | None:
     try:
         creds_data = json.loads(path.read_text())
         if creds_data.get("type") == "service_account":
-            return service_account.Credentials.from_service_account_file(creds_path, scopes=SCOPES)
+            creds = service_account.Credentials.from_service_account_file(creds_path, scopes=SCOPES)
+            if user_email:
+                return creds.with_subject(user_email)
+            print(f"  ✗ Gmail: Service account requires GMAIL_USER_EMAIL to impersonate a user")
+            return None
         return Credentials.from_authorized_user_file(creds_path, SCOPES)
     except Exception as e:
         print(f"  ✗ Gmail: Failed to load credentials: {e}")

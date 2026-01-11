@@ -58,13 +58,25 @@ def save_state(data_dir: Path, state: dict):
     state_path.write_text(json.dumps(state, indent=2, default=str))
 
 
-async def sync_all_async(data_dir: str) -> bool:
-    """Sync all enabled data sources. Returns True if new data was fetched."""
+async def sync_all_async(data_dir: str, connector_filter: list[str] | None = None) -> bool:
+    """Sync all enabled data sources. Returns True if new data was fetched.
+    
+    Args:
+        data_dir: Directory to store synced data
+        connector_filter: Optional list of connector names to sync (e.g., ['gmail', 'slack']).
+                         If None, syncs all enabled connectors.
+    """
     data_path = Path(data_dir)
     data_path.mkdir(parents=True, exist_ok=True)
     
     state_manager = StateManager(data_path)
     connectors = get_enabled_connectors()
+    
+    if connector_filter:
+        connectors = [c for c in connectors if c.name in connector_filter]
+        if not connectors:
+            print(f"  ⚠ No enabled connectors match filter: {', '.join(connector_filter)}")
+            return False
     
     if not connectors:
         print("  ⚠ No connectors enabled")
@@ -98,9 +110,15 @@ async def sync_all_async(data_dir: str) -> bool:
     return updated
 
 
-def sync_all(data_dir: str) -> bool:
-    """Sync all enabled sources (sync wrapper). Returns True if new data was fetched."""
-    return asyncio.run(sync_all_async(data_dir))
+def sync_all(data_dir: str, connector_filter: list[str] | None = None) -> bool:
+    """Sync all enabled sources (sync wrapper). Returns True if new data was fetched.
+    
+    Args:
+        data_dir: Directory to store synced data
+        connector_filter: Optional list of connector names to sync (e.g., ['gmail', 'slack']).
+                         If None, syncs all enabled connectors.
+    """
+    return asyncio.run(sync_all_async(data_dir, connector_filter=connector_filter))
 
 
 def needs_sync(data_dir: str, max_age_minutes: int = 30) -> bool:

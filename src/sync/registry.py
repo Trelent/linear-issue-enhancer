@@ -8,13 +8,11 @@ def get_all_connectors() -> list[Connector]:
     # Import here to avoid circular imports
     from .connectors.slack import SlackConnector
     from .connectors.gdrive import GDriveConnector
-    from .connectors.github import GitHubConnector
     from .connectors.gmail import GmailConnector
     
     return [
         SlackConnector(),
         GDriveConnector(),
-        GitHubConnector(),
         GmailConnector(),
     ]
 

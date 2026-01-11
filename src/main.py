@@ -149,9 +149,14 @@ async def create_issue(
 
 def cmd_sync(args):
     """Run sync command."""
+    connector_filter = None
+    if args.connectors:
+        connector_filter = [c.strip().lower() for c in args.connectors.split(",")]
+        print(f"📌 Filtering to connectors: {', '.join(connector_filter)}\n")
+    
     print_connector_status()
     print("\n📥 Syncing data sources...")
-    updated = sync_all(args.docs)
+    updated = sync_all(args.docs, connector_filter=connector_filter)
     print("✅ Sync complete." + (" New data fetched." if updated else " No new data."))
 
 
@@ -181,6 +186,7 @@ def main():
     # Sync command
     sync_parser = subparsers.add_parser("sync", help="Sync data from enabled connectors (set via env vars)")
     sync_parser.add_argument("--docs", "-d", default="./data", help="Directory to store synced markdown files (default: ./data)")
+    sync_parser.add_argument("--connectors", "-c", help="Comma-separated list of connectors to sync (e.g., gmail,slack). If omitted, syncs all enabled connectors.")
 
     # Issue command
     issue_parser = subparsers.add_parser("issue", help="Create a Linear issue")
