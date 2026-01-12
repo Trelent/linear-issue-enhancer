@@ -337,7 +337,7 @@ async def enhance_issue(
         
         # Always sync to ensure we have the latest data
         print("📥 Syncing data sources...", flush=True)
-        await sync_all_async(DOCS_DIR, slack_token=SLACK_TOKEN, gdrive_creds=GDRIVE_CREDS)
+        await sync_all_async(DOCS_DIR)
         
         # Step 1: Research context from Slack/GDrive FIRST
         print("🔬 Step 1: Researching context (Slack/GDrive)...", flush=True)
@@ -434,7 +434,7 @@ async def retry_enhance_issue(issue_id: str, feedback: str, model_shorthand: str
         
         # Sync data sources
         print("📥 Syncing data sources...", flush=True)
-        await sync_all_async(DOCS_DIR, slack_token=SLACK_TOKEN, gdrive_creds=GDRIVE_CREDS)
+        await sync_all_async(DOCS_DIR)
         
         # Research context
         print("🔬 Step 1: Researching context (Slack/GDrive)...", flush=True)
