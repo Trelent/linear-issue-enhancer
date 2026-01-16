@@ -2,13 +2,14 @@
 
 from src.linear import add_comment
 from src.commands.command import SlashCommand, CommandContext, CommandResult
+from src.commands.threading import get_reply_target
 
 
 class HelpCommand(SlashCommand):
     """List all available slash commands."""
     
     name = "help"
-    description = "Show this help message"
+    description = "Show this help message (replies in thread)"
     args_hint = ""
     
     async def execute(self, ctx: CommandContext) -> CommandResult:
@@ -16,6 +17,7 @@ class HelpCommand(SlashCommand):
         from src.commands.registry import get_all_commands
         
         commands = get_all_commands()
+        reply_to_id = get_reply_target(ctx.comment_id, ctx.parent_comment_id)
         
         lines = ["## Available Commands\n"]
         for cmd in commands:
@@ -32,8 +34,10 @@ class HelpCommand(SlashCommand):
         
         print(f"", flush=True)
         print(f"▶ [WH] HELP COMMAND for issue {ctx.issue_id}", flush=True)
+        if reply_to_id:
+            print(f"       Reply to: {reply_to_id}{' (parent)' if ctx.parent_comment_id else ''}", flush=True)
         
-        await add_comment(ctx.issue_id, help_text)
+        await add_comment(ctx.issue_id, help_text, parent_id=reply_to_id)
         
         return CommandResult(
             status="completed",

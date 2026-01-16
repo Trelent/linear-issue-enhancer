@@ -87,7 +87,7 @@ class TestCommandDispatch:
         
         background_tasks = MagicMock()
         
-        with patch("src.commands.handlers.help.add_comment", new_callable=AsyncMock) as mock_comment:
+        with patch("src.commands.handlers.help.handler.add_comment", new_callable=AsyncMock) as mock_comment:
             mock_comment.return_value = True
             result = await dispatch_command(
                 comment_body="/help",
@@ -169,7 +169,7 @@ class TestCommandDispatch:
         
         background_tasks = MagicMock()
         
-        with patch("src.commands.handlers.help.add_comment", new_callable=AsyncMock) as mock_comment:
+        with patch("src.commands.handlers.help.handler.add_comment", new_callable=AsyncMock) as mock_comment:
             mock_comment.return_value = True
             result = await dispatch_command(
                 comment_body="  /help  ",  # Extra whitespace
@@ -189,7 +189,7 @@ class TestCommandDispatch:
         
         background_tasks = MagicMock()
         
-        with patch("src.commands.handlers.help.add_comment", new_callable=AsyncMock) as mock_comment:
+        with patch("src.commands.handlers.help.handler.add_comment", new_callable=AsyncMock) as mock_comment:
             mock_comment.return_value = True
             result = await dispatch_command(
                 comment_body="/HELP",
@@ -209,7 +209,7 @@ class TestHelpCommand:
 
     @pytest.mark.asyncio
     async def test_help_posts_comment_with_all_commands(self):
-        from src.commands.handlers.help import HelpCommand
+        from src.commands.handlers.help.handler import HelpCommand
         from src.commands.command import CommandContext
         from src.commands.registry import get_all_commands
         
@@ -224,7 +224,7 @@ class TestHelpCommand:
             background_tasks=background_tasks,
         )
         
-        with patch("src.commands.handlers.help.add_comment", new_callable=AsyncMock) as mock_comment:
+        with patch("src.commands.handlers.help.handler.add_comment", new_callable=AsyncMock) as mock_comment:
             mock_comment.return_value = True
             cmd = HelpCommand()
             result = await cmd.execute(ctx)
@@ -242,7 +242,7 @@ class TestAskCommand:
 
     @pytest.mark.asyncio
     async def test_ask_parses_model_tag(self):
-        from src.commands.handlers.ask import AskCommand
+        from src.commands.handlers.ask.handler import AskCommand
         from src.commands.command import CommandContext
         
         background_tasks = MagicMock()
@@ -263,9 +263,9 @@ class TestAskCommand:
         assert result.model == "opus"
 
     @pytest.mark.asyncio
-    async def test_ask_passes_comment_id_for_threading(self):
-        """Verify /ask passes the comment_id to reply to (for threading)."""
-        from src.commands.handlers.ask import AskCommand
+    async def test_ask_passes_comment_id_for_threading_top_level(self):
+        """Verify /ask on a top-level comment replies to itself."""
+        from src.commands.handlers.ask.handler import AskCommand
         from src.commands.command import CommandContext
         
         background_tasks = MagicMock()
@@ -278,7 +278,7 @@ class TestAskCommand:
             raw_body="/ask What is this about?",
             background_tasks=background_tasks,
             comment_id="comment-456",  # The /ask comment's ID
-            parent_comment_id=None,
+            parent_comment_id=None,  # No parent - top-level comment
         )
         
         cmd = AskCommand()
@@ -290,7 +290,42 @@ class TestAskCommand:
         # args[0] is the function, args[1:] are positional args
         assert call_args[0][0].__name__ == "answer_question"
         assert call_args[0][1] == "issue-123"  # issue_id
-        assert call_args[0][5] == "comment-456"  # reply_to_id (6th positional arg)
+        assert call_args[0][5] == "comment-456"  # reply_to_id should be the /ask comment
+
+    @pytest.mark.asyncio
+    async def test_ask_uses_parent_when_replying_to_thread(self):
+        """Regression test: /ask in a thread should reply to the parent, not to itself.
+        
+        Linear only supports one level of nesting. If /ask is posted as a reply,
+        we must reply to the same parent (top-level comment), not to the /ask comment.
+        """
+        from src.commands.handlers.ask.handler import AskCommand
+        from src.commands.command import CommandContext
+        
+        background_tasks = MagicMock()
+        ctx = CommandContext(
+            issue_id="issue-123",
+            issue_identifier="ENG-1",
+            args="Follow-up question?",
+            user_id="user-1",
+            user_name="Test User",
+            raw_body="/ask Follow-up question?",
+            background_tasks=background_tasks,
+            comment_id="comment-789",  # The /ask comment's ID
+            parent_comment_id="comment-456",  # /ask is a reply to this top-level comment
+        )
+        
+        cmd = AskCommand()
+        await cmd.execute(ctx)
+        
+        # Verify the background task uses parent_comment_id, NOT comment_id
+        background_tasks.add_task.assert_called_once()
+        call_args = background_tasks.add_task.call_args
+        assert call_args[0][0].__name__ == "answer_question"
+        assert call_args[0][1] == "issue-123"  # issue_id
+        # CRITICAL: reply_to_id should be parent-456, not comment-789
+        # Linear requires replies to be to top-level comments only
+        assert call_args[0][5] == "comment-456"  # reply_to_id should be the PARENT
 
 
 class TestRetryCommand:
@@ -298,7 +333,7 @@ class TestRetryCommand:
 
     @pytest.mark.asyncio
     async def test_retry_parses_model_tag(self):
-        from src.commands.handlers.retry import RetryCommand
+        from src.commands.handlers.retry.handler import RetryCommand
         from src.commands.command import CommandContext
         
         background_tasks = MagicMock()
@@ -320,7 +355,7 @@ class TestRetryCommand:
 
     @pytest.mark.asyncio
     async def test_retry_works_without_feedback(self):
-        from src.commands.handlers.retry import RetryCommand
+        from src.commands.handlers.retry.handler import RetryCommand
         from src.commands.command import CommandContext
         
         background_tasks = MagicMock()
@@ -351,7 +386,7 @@ class TestCommentThreading:
         
         background_tasks = MagicMock()
         
-        with patch("src.commands.handlers.help.add_comment", new_callable=AsyncMock) as mock_comment:
+        with patch("src.commands.handlers.help.handler.add_comment", new_callable=AsyncMock) as mock_comment:
             mock_comment.return_value = True
             result = await dispatch_command(
                 comment_body="/help",
@@ -432,7 +467,7 @@ class TestWebhookCommandIntegration:
         
         with patch("src.api.sync_all_async", new_callable=AsyncMock) as mock_sync:
             mock_sync.return_value = False
-            with patch("src.commands.handlers.help.add_comment", new_callable=AsyncMock) as mock_comment:
+            with patch("src.commands.handlers.help.handler.add_comment", new_callable=AsyncMock) as mock_comment:
                 mock_comment.return_value = True
                 with TestClient(app) as client:
                     response = client.post("/webhook/linear", json=payload)
@@ -466,7 +501,7 @@ class TestWebhookCommandIntegration:
         with patch("src.api.sync_all_async", new_callable=AsyncMock) as mock_sync:
             mock_sync.return_value = False
             # Mock the background task at the import location in the handler
-            with patch("src.commands.handlers.ask.answer_question", new_callable=AsyncMock):
+            with patch("src.commands.handlers.ask.handler.answer_question", new_callable=AsyncMock):
                 with TestClient(app) as client:
                     response = client.post("/webhook/linear", json=payload)
         

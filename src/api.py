@@ -22,13 +22,13 @@ from src.linear import update_issue_description, add_comment
 from src.agents import parse_model_tag
 from src.sync import sync_all_async, print_connector_status
 from src.commands import dispatch_command
-from src.commands.tasks import (
+from src.commands.shared import (
     DOCS_DIR,
     ENHANCEMENT_MARKER,
     _build_enhancement_markers,
-    _research_context,
-    _research_codebase,
-    _write_enhanced_description,
+    research_context,
+    research_codebase,
+    write_enhanced_description,
 )
 
 
@@ -311,7 +311,7 @@ async def enhance_issue(
         # Step 1: Research context from Slack/GDrive FIRST
         print("🔬 Step 1: Researching context (Slack/GDrive)...", flush=True)
         try:
-            context = await _research_context(prompt, model_shorthand)
+            context = await research_context(prompt, model_shorthand)
         except Exception as e:
             print(f"⚠️ Context research error: {e}", flush=True)
             context = f"Error researching context: {e}"
@@ -320,14 +320,14 @@ async def enhance_issue(
         print("🔬 Step 2: Researching codebase (with context)...", flush=True)
         with tempfile.TemporaryDirectory() as work_dir:
             try:
-                code_analysis = await _research_codebase(prompt, context, work_dir, model_shorthand)
+                code_analysis = await research_codebase(prompt, context, work_dir, model_shorthand)
             except Exception as e:
                 print(f"⚠️ Code research error: {e}", flush=True)
                 code_analysis = f"Error researching code: {e}"
         
         # Generate enhanced description
         print("✍️ Writing enhanced description...", flush=True)
-        enhanced = await _write_enhanced_description(title, existing_description, context, code_analysis, model_shorthand)
+        enhanced = await write_enhanced_description(title, existing_description, context, code_analysis, model_shorthand)
         
         # Add markers (includes original description for retry)
         markers = _build_enhancement_markers(existing_description)

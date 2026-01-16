@@ -2,7 +2,8 @@
 
 from src.agents import parse_model_tag
 from src.commands.command import SlashCommand, CommandContext, CommandResult
-from src.commands.tasks import answer_question
+from src.commands.threading import get_reply_target
+from .task import answer_question
 
 
 class AskCommand(SlashCommand):
@@ -25,9 +26,7 @@ class AskCommand(SlashCommand):
             )
         
         model_shorthand = parse_model_tag(question)
-        
-        # Reply to the /ask comment itself to create a thread
-        reply_to_id = ctx.comment_id
+        reply_to_id = get_reply_target(ctx.comment_id, ctx.parent_comment_id)
         
         print(f"", flush=True)
         print(f"▶ [WH] ASK COMMAND for issue {ctx.issue_id}", flush=True)
@@ -35,7 +34,7 @@ class AskCommand(SlashCommand):
         print(f"       User: {ctx.user_name}", flush=True)
         print(f"       Question: {question[:60]}{'...' if len(question) > 60 else ''}", flush=True)
         if reply_to_id:
-            print(f"       Reply to: {reply_to_id}", flush=True)
+            print(f"       Reply to: {reply_to_id}{' (parent)' if ctx.parent_comment_id else ''}", flush=True)
         
         ctx.background_tasks.add_task(
             answer_question,
