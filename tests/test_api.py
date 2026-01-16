@@ -127,7 +127,8 @@ class TestWebhookSkipLogic:
     async def test_already_enhanced_is_skipped(self):
         """Issues with enhancement marker should be skipped."""
         from fastapi.testclient import TestClient
-        from src.api import app, ENHANCEMENT_MARKER
+        from src.api import app
+        from src.commands.tasks import ENHANCEMENT_MARKER
         
         payload = {
             "action": "create",
@@ -175,7 +176,7 @@ class TestEnhancementMarkers:
     """Tests for enhancement marker encoding/decoding."""
 
     def test_encode_decode_roundtrip(self):
-        from src.api import _encode_original_description, _decode_original_description
+        from src.commands.tasks import _encode_original_description, _decode_original_description
         
         original = "This is the original description with special chars: <>&\""
         encoded = _encode_original_description(original)
@@ -184,7 +185,7 @@ class TestEnhancementMarkers:
         assert decoded == original
 
     def test_extract_original_description(self):
-        from src.api import (
+        from src.commands.tasks import (
             _extract_original_description,
             _build_enhancement_markers,
         )
@@ -198,6 +199,6 @@ class TestEnhancementMarkers:
         assert extracted == original
 
     def test_extract_returns_none_when_no_marker(self):
-        from src.api import _extract_original_description
+        from src.commands.tasks import _extract_original_description
         
         assert _extract_original_description("No markers here") is None
