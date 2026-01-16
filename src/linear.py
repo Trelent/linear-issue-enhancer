@@ -9,6 +9,15 @@ LINEAR_API_URL = "https://api.linear.app/graphql"
 
 
 @dataclass
+class LinearComment:
+    id: str
+    body: str
+    user_id: str
+    user_name: str
+    created_at: str
+
+
+@dataclass
 class LinearIssue:
     id: str
     identifier: str  # e.g., "ENG-123"
@@ -113,8 +122,38 @@ async def update_issue_description(issue_id: str, description: str) -> bool:
     return data["issueUpdate"]["success"]
 
 
-async def add_comment(issue_id: str, body: str) -> bool:
-    """Add a comment to an issue."""
+async def add_comment(issue_id: str, body: str, parent_id: str | None = None) -> bool:
+    """Add a comment to an issue, optionally as a reply to another comment.
+    
+    Args:
+        issue_id: The issue ID to comment on
+        body: The comment body
+        parent_id: Optional parent comment ID to reply to (creates a threaded reply)
+        
+    Note:
+        Linear only allows replies to top-level comments. If parent_id points to
+        a nested reply, this will fall back to posting a top-level comment.
+    """
+    # Try threaded reply if parent_id is provided
+    if parent_id:
+        try:
+            mutation = """
+            mutation AddCommentReply($issueId: String!, $body: String!, $parentId: String!) {
+                commentCreate(input: { issueId: $issueId, body: $body, parentId: $parentId }) {
+                    success
+                }
+            }
+            """
+            data = await _graphql_async(mutation, {"issueId": issue_id, "body": body, "parentId": parent_id})
+            return data["commentCreate"]["success"]
+        except Exception as e:
+            # Fall back to top-level comment if threading fails (e.g., parent is not top-level)
+            if "incorrect parent" in str(e).lower():
+                print(f"⚠️ Threading failed (parent not top-level), falling back to top-level comment", flush=True)
+            else:
+                raise
+    
+    # Post as top-level comment
     mutation = """
     mutation AddComment($issueId: String!, $body: String!) {
         commentCreate(input: { issueId: $issueId, body: $body }) {
@@ -124,4 +163,39 @@ async def add_comment(issue_id: str, body: str) -> bool:
     """
     data = await _graphql_async(mutation, {"issueId": issue_id, "body": body})
     return data["commentCreate"]["success"]
+
+
+async def get_issue_comments(issue_id: str) -> list[LinearComment]:
+    """Fetch all comments for an issue, ordered by creation time."""
+    query = """
+    query GetIssueComments($id: String!) {
+        issue(id: $id) {
+            comments {
+                nodes {
+                    id
+                    body
+                    createdAt
+                    user {
+                        id
+                        displayName
+                    }
+                }
+            }
+        }
+    }
+    """
+    data = await _graphql_async(query, {"id": issue_id})
+    nodes = data["issue"]["comments"]["nodes"]
+    comments = [
+        LinearComment(
+            id=node["id"],
+            body=node["body"],
+            user_id=node["user"]["id"] if node.get("user") else "",
+            user_name=node["user"]["displayName"] if node.get("user") else "Unknown",
+            created_at=node["createdAt"],
+        )
+        for node in nodes
+    ]
+    # Sort by created_at ascending (oldest first)
+    return sorted(comments, key=lambda c: c.created_at)
 
