@@ -9,6 +9,15 @@ LINEAR_API_URL = "https://api.linear.app/graphql"
 
 
 @dataclass
+class LinearComment:
+    id: str
+    body: str
+    user_id: str
+    user_name: str
+    created_at: str
+
+
+@dataclass
 class LinearIssue:
     id: str
     identifier: str  # e.g., "ENG-123"
@@ -124,4 +133,39 @@ async def add_comment(issue_id: str, body: str) -> bool:
     """
     data = await _graphql_async(mutation, {"issueId": issue_id, "body": body})
     return data["commentCreate"]["success"]
+
+
+async def get_issue_comments(issue_id: str) -> list[LinearComment]:
+    """Fetch all comments for an issue, ordered by creation time."""
+    query = """
+    query GetIssueComments($id: String!) {
+        issue(id: $id) {
+            comments {
+                nodes {
+                    id
+                    body
+                    createdAt
+                    user {
+                        id
+                        displayName
+                    }
+                }
+            }
+        }
+    }
+    """
+    data = await _graphql_async(query, {"id": issue_id})
+    nodes = data["issue"]["comments"]["nodes"]
+    comments = [
+        LinearComment(
+            id=node["id"],
+            body=node["body"],
+            user_id=node["user"]["id"] if node.get("user") else "",
+            user_name=node["user"]["displayName"] if node.get("user") else "Unknown",
+            created_at=node["createdAt"],
+        )
+        for node in nodes
+    ]
+    # Sort by created_at ascending (oldest first)
+    return sorted(comments, key=lambda c: c.created_at)
 

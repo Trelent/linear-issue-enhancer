@@ -19,11 +19,12 @@ from agents.tracing import add_trace_processor
 from src.tracing import ConsoleTracer
 add_trace_processor(ConsoleTracer())
 
-from src.linear import update_issue_description, add_comment, get_issue
+from src.linear import update_issue_description, add_comment, get_issue, get_issue_comments
 from src.agents import (
     create_context_researcher,
     create_code_researcher,
     create_issue_writer,
+    create_question_answerer,
     parse_model_tag,
 )
 from src.sync import sync_all_async, print_connector_status
@@ -208,11 +209,13 @@ async def linear_webhook(request: Request, background_tasks: BackgroundTasks):
 
 
 async def _handle_comment_create(data: dict, background_tasks: BackgroundTasks):
-    """Handle comment creation - check for /retry command."""
+    """Handle comment creation - check for slash commands (/retry, /ask)."""
     comment_body = data.get("body") or ""
     issue_data = data.get("issue", {})
     issue_id = issue_data.get("id")
     issue_identifier = issue_data.get("identifier", "?")
+    user_data = data.get("user", {})
+    user_name = user_data.get("displayName", "")
     
     print(f"· [WH] Comment/create on {issue_identifier}: \"{comment_body[:50]}{'...' if len(comment_body) > 50 else ''}\"", flush=True)
     
@@ -220,13 +223,24 @@ async def _handle_comment_create(data: dict, background_tasks: BackgroundTasks):
         print(f"  → Missing issue ID in payload, ignored", flush=True)
         return {"status": "ignored", "reason": "Missing issue ID in comment"}
     
-    # Check for /retry command
-    if not comment_body.strip().startswith("/retry"):
-        print(f"  → Not a /retry command, ignored", flush=True)
-        return {"status": "ignored", "reason": "Not a /retry command"}
+    comment_stripped = comment_body.strip()
     
+    # Check for /ask command
+    if comment_stripped.startswith("/ask"):
+        return await _handle_ask_command(issue_id, comment_stripped, user_name, background_tasks)
+    
+    # Check for /retry command
+    if comment_stripped.startswith("/retry"):
+        return await _handle_retry_command(issue_id, comment_stripped, background_tasks)
+    
+    print(f"  → Not a slash command, ignored", flush=True)
+    return {"status": "ignored", "reason": "Not a slash command"}
+
+
+async def _handle_retry_command(issue_id: str, comment_body: str, background_tasks: BackgroundTasks):
+    """Handle /retry command."""
     # Extract feedback after /retry
-    feedback = comment_body.strip()[6:].strip()  # Remove "/retry" prefix
+    feedback = comment_body[6:].strip()  # Remove "/retry" prefix
     
     # Parse model selection from comment (e.g., "/retry [model=opus] please try again")
     model_shorthand = parse_model_tag(feedback)
@@ -244,6 +258,30 @@ async def _handle_comment_create(data: dict, background_tasks: BackgroundTasks):
     background_tasks.add_task(retry_enhance_issue, issue_id, feedback, model_shorthand)
     
     return {"status": "queued", "action": "retry", "issue_id": issue_id, "model": model_shorthand or "default"}
+
+
+async def _handle_ask_command(issue_id: str, comment_body: str, user_name: str, background_tasks: BackgroundTasks):
+    """Handle /ask command."""
+    # Extract question after /ask
+    question = comment_body[4:].strip()  # Remove "/ask" prefix
+    
+    if not question:
+        print(f"  → /ask command with no question, ignored", flush=True)
+        return {"status": "ignored", "reason": "No question provided"}
+    
+    # Parse model selection from comment (e.g., "/ask [model=opus] what is X?")
+    model_shorthand = parse_model_tag(question)
+    
+    print(f"", flush=True)
+    print(f"▶ [WH] ASK COMMAND for issue {issue_id}", flush=True)
+    print(f"       Model: {model_shorthand or 'default'}", flush=True)
+    print(f"       User: {user_name}", flush=True)
+    print(f"       Question: {question[:60]}{'...' if len(question) > 60 else ''}", flush=True)
+    
+    # Queue answer in background
+    background_tasks.add_task(answer_question, issue_id, question, user_name, model_shorthand)
+    
+    return {"status": "queued", "action": "ask", "issue_id": issue_id, "model": model_shorthand or "default"}
 
 
 async def _handle_issue_create(data: dict, background_tasks: BackgroundTasks):
@@ -479,6 +517,112 @@ async def retry_enhance_issue(issue_id: str, feedback: str, model_shorthand: str
         import traceback
         traceback.print_exc()
         await add_comment(issue_id, "❌ _Retry enhancement failed during issue processing. Please check server logs for details._")
+
+
+async def answer_question(
+    issue_id: str,
+    question: str,
+    user_name: str,
+    model_shorthand: str | None = None,
+):
+    """Answer a user's question using context and code research."""
+    print(f"\n{'='*60}", flush=True)
+    print(f"❓ Answering question for issue: {issue_id}", flush=True)
+    print(f"   Model: {model_shorthand or 'default'}", flush=True)
+    print(f"   User: {user_name}", flush=True)
+    print(f"{'='*60}\n", flush=True)
+    
+    # Add "thinking" comment
+    try:
+        await add_comment(issue_id, "🤔 _Researching your question..._")
+    except Exception as e:
+        if "Entity not found" in str(e) or "not found" in str(e).lower():
+            print(f"⚠️ Issue {issue_id} no longer exists, skipping answer", flush=True)
+            return
+        raise
+    
+    # Fetch issue data and comments for full context
+    try:
+        issue = await get_issue(issue_id)
+        comments = await get_issue_comments(issue_id)
+    except Exception as e:
+        print(f"❌ Failed to fetch issue/comments: {e}", flush=True)
+        await add_comment(issue_id, "❌ _Failed to fetch issue data. Please check server logs for details._")
+        return
+    
+    # Build conversation context from comments
+    comment_context = "\n\n".join([
+        f"**{c.user_name}** ({c.created_at}):\n{c.body}"
+        for c in comments
+    ])
+    
+    try:
+        # Sync data sources
+        print("📥 Syncing data sources...", flush=True)
+        await sync_all_async(DOCS_DIR)
+        
+        # Build the full prompt for the agent
+        issue_context = f"""## Issue: {issue.title}
+
+**Identifier:** {issue.identifier}
+**Status:** {issue.state_name}
+**Team:** {issue.team_name}
+
+### Description
+{issue.description or "_No description_"}
+
+### Comment History
+{comment_context or "_No previous comments_"}
+"""
+        
+        # Research and answer the question
+        print("🔬 Researching and answering question...", flush=True)
+        with tempfile.TemporaryDirectory() as work_dir:
+            repos_dir = os.path.join(work_dir, "repos")
+            clear_cloned_repos()
+            set_repos_base_dir(repos_dir)
+            
+            agent = create_question_answerer(model_shorthand)
+            result = await Runner.run(
+                agent,
+                f"""Answer the following question about this issue:
+
+{issue_context}
+
+---
+
+**User's Question from {user_name}:**
+{question}
+
+---
+
+**Instructions:**
+1. Research using available tools (docs in {DOCS_DIR}, and GitHub repos)
+2. Provide a clear, direct answer to the question
+3. Include specific references where helpful
+4. Keep your response focused and conversational""",
+                max_turns=MAX_TURNS,
+            )
+            answer = str(result.final_output)
+        
+        # Format the response with user tag
+        user_tag = f"@{user_name}" if user_name else ""
+        response = f"{user_tag}\n\n{answer}" if user_tag else answer
+        
+        # Add the answer as a comment
+        print(f"📝 Posting answer...", flush=True)
+        success = await add_comment(issue_id, response)
+        
+        if success:
+            print(f"✅ Question answered successfully!", flush=True)
+        else:
+            print(f"❌ Failed to post answer", flush=True)
+            
+    except Exception as e:
+        print(f"❌ Answer failed with error: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        await add_comment(issue_id, "❌ _Failed to answer question. Please check server logs for details._")
 
 
 async def _research_context(prompt: str, model_shorthand: str | None = None) -> str:
