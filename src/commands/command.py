@@ -18,6 +18,8 @@ class CommandContext:
     user_name: str
     raw_body: str  # Full comment body
     background_tasks: "BackgroundTasks"  # For queuing async work
+    comment_id: str | None = None  # ID of the comment containing the command
+    parent_comment_id: str | None = None  # ID of parent comment if this is a reply
 
 
 @dataclass

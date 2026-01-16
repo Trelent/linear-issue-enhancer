@@ -27,8 +27,20 @@ async def dispatch_command(
     user_id: str,
     user_name: str,
     background_tasks: BackgroundTasks,
+    comment_id: str | None = None,
+    parent_comment_id: str | None = None,
 ) -> CommandResult | None:
     """Parse and dispatch a slash command from a comment.
+    
+    Args:
+        comment_body: The comment text
+        issue_id: Linear issue ID
+        issue_identifier: Issue identifier (e.g., "ENG-123")
+        user_id: ID of user who made the comment
+        user_name: Display name of user
+        background_tasks: FastAPI background tasks for async work
+        comment_id: ID of the comment containing the command
+        parent_comment_id: ID of parent comment if this is a reply
     
     Returns:
         CommandResult if a command was found and executed, None otherwise.
@@ -58,6 +70,8 @@ async def dispatch_command(
         user_name=user_name,
         raw_body=comment_body,
         background_tasks=background_tasks,
+        comment_id=comment_id,
+        parent_comment_id=parent_comment_id,
     )
     
     return await handler.execute(ctx)

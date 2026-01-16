@@ -171,6 +171,7 @@ async def linear_webhook(request: Request, background_tasks: BackgroundTasks):
 async def _handle_comment_create(data: dict, background_tasks: BackgroundTasks):
     """Handle comment creation - dispatch to slash command registry."""
     comment_body = data.get("body") or ""
+    comment_id = data.get("id")
     issue_data = data.get("issue", {})
     issue_id = issue_data.get("id")
     issue_identifier = issue_data.get("identifier", "?")
@@ -178,7 +179,13 @@ async def _handle_comment_create(data: dict, background_tasks: BackgroundTasks):
     user_id = user_data.get("id", "")
     user_name = user_data.get("displayName", "")
     
+    # Extract parent comment ID if this is a reply
+    parent_data = data.get("parent", {})
+    parent_comment_id = parent_data.get("id") if parent_data else None
+    
     print(f"· [WH] Comment/create on {issue_identifier}: \"{comment_body[:50]}{'...' if len(comment_body) > 50 else ''}\"", flush=True)
+    if parent_comment_id:
+        print(f"       (reply to comment {parent_comment_id})", flush=True)
     
     if not issue_id:
         print(f"  → Missing issue ID in payload, ignored", flush=True)
@@ -192,6 +199,8 @@ async def _handle_comment_create(data: dict, background_tasks: BackgroundTasks):
         user_id=user_id,
         user_name=user_name,
         background_tasks=background_tasks,
+        comment_id=comment_id,
+        parent_comment_id=parent_comment_id,
     )
     
     if result is None:

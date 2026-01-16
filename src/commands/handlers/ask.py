@@ -9,7 +9,7 @@ class AskCommand(SlashCommand):
     """Answer a question using context and code research."""
     
     name = "ask"
-    description = "Ask a question and get an AI-researched answer"
+    description = "Ask a question and get an AI-researched answer (replies in thread)"
     args_hint = "<question> [model=X]"
     
     async def execute(self, ctx: CommandContext) -> CommandResult:
@@ -26,13 +26,25 @@ class AskCommand(SlashCommand):
         
         model_shorthand = parse_model_tag(question)
         
+        # Reply to the /ask comment itself to create a thread
+        reply_to_id = ctx.comment_id
+        
         print(f"", flush=True)
         print(f"▶ [WH] ASK COMMAND for issue {ctx.issue_id}", flush=True)
         print(f"       Model: {model_shorthand or 'default'}", flush=True)
         print(f"       User: {ctx.user_name}", flush=True)
         print(f"       Question: {question[:60]}{'...' if len(question) > 60 else ''}", flush=True)
+        if reply_to_id:
+            print(f"       Reply to: {reply_to_id}", flush=True)
         
-        ctx.background_tasks.add_task(answer_question, ctx.issue_id, question, ctx.user_name, model_shorthand)
+        ctx.background_tasks.add_task(
+            answer_question,
+            ctx.issue_id,
+            question,
+            ctx.user_name,
+            model_shorthand,
+            reply_to_id,
+        )
         
         return CommandResult(
             status="queued",

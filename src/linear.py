@@ -122,16 +122,32 @@ async def update_issue_description(issue_id: str, description: str) -> bool:
     return data["issueUpdate"]["success"]
 
 
-async def add_comment(issue_id: str, body: str) -> bool:
-    """Add a comment to an issue."""
-    mutation = """
-    mutation AddComment($issueId: String!, $body: String!) {
-        commentCreate(input: { issueId: $issueId, body: $body }) {
-            success
-        }
-    }
+async def add_comment(issue_id: str, body: str, parent_id: str | None = None) -> bool:
+    """Add a comment to an issue, optionally as a reply to another comment.
+    
+    Args:
+        issue_id: The issue ID to comment on
+        body: The comment body
+        parent_id: Optional parent comment ID to reply to (creates a threaded reply)
     """
-    data = await _graphql_async(mutation, {"issueId": issue_id, "body": body})
+    if parent_id:
+        mutation = """
+        mutation AddCommentReply($issueId: String!, $body: String!, $parentId: String!) {
+            commentCreate(input: { issueId: $issueId, body: $body, parentId: $parentId }) {
+                success
+            }
+        }
+        """
+        data = await _graphql_async(mutation, {"issueId": issue_id, "body": body, "parentId": parent_id})
+    else:
+        mutation = """
+        mutation AddComment($issueId: String!, $body: String!) {
+            commentCreate(input: { issueId: $issueId, body: $body }) {
+                success
+            }
+        }
+        """
+        data = await _graphql_async(mutation, {"issueId": issue_id, "body": body})
     return data["commentCreate"]["success"]
 
 

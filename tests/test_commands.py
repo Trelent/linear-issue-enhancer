@@ -262,6 +262,36 @@ class TestAskCommand:
         assert result.status == "queued"
         assert result.model == "opus"
 
+    @pytest.mark.asyncio
+    async def test_ask_passes_comment_id_for_threading(self):
+        """Verify /ask passes the comment_id to reply to (for threading)."""
+        from src.commands.handlers.ask import AskCommand
+        from src.commands.command import CommandContext
+        
+        background_tasks = MagicMock()
+        ctx = CommandContext(
+            issue_id="issue-123",
+            issue_identifier="ENG-1",
+            args="What is this about?",
+            user_id="user-1",
+            user_name="Test User",
+            raw_body="/ask What is this about?",
+            background_tasks=background_tasks,
+            comment_id="comment-456",  # The /ask comment's ID
+            parent_comment_id=None,
+        )
+        
+        cmd = AskCommand()
+        await cmd.execute(ctx)
+        
+        # Verify the background task was called with the comment_id as reply_to_id
+        background_tasks.add_task.assert_called_once()
+        call_args = background_tasks.add_task.call_args
+        # args[0] is the function, args[1:] are positional args
+        assert call_args[0][0].__name__ == "answer_question"
+        assert call_args[0][1] == "issue-123"  # issue_id
+        assert call_args[0][5] == "comment-456"  # reply_to_id (6th positional arg)
+
 
 class TestRetryCommand:
     """Tests for the /retry command."""
@@ -309,6 +339,71 @@ class TestRetryCommand:
         
         assert result.status == "queued"
         background_tasks.add_task.assert_called_once()
+
+
+class TestCommentThreading:
+    """Tests for comment threading support."""
+
+    @pytest.mark.asyncio
+    async def test_dispatch_passes_comment_and_parent_ids(self):
+        """Verify dispatch_command passes through comment and parent IDs."""
+        from src.commands.registry import dispatch_command
+        
+        background_tasks = MagicMock()
+        
+        with patch("src.commands.handlers.help.add_comment", new_callable=AsyncMock) as mock_comment:
+            mock_comment.return_value = True
+            result = await dispatch_command(
+                comment_body="/help",
+                issue_id="issue-123",
+                issue_identifier="ENG-1",
+                user_id="user-1",
+                user_name="Test User",
+                background_tasks=background_tasks,
+                comment_id="comment-456",
+                parent_comment_id="parent-789",
+            )
+        
+        assert result is not None
+        assert result.action == "help"
+
+    @pytest.mark.asyncio
+    async def test_context_includes_threading_fields(self):
+        """Verify CommandContext includes comment_id and parent_comment_id."""
+        from src.commands.command import CommandContext
+        
+        ctx = CommandContext(
+            issue_id="issue-123",
+            issue_identifier="ENG-1",
+            args="test",
+            user_id="user-1",
+            user_name="Test User",
+            raw_body="/test",
+            background_tasks=MagicMock(),
+            comment_id="comment-456",
+            parent_comment_id="parent-789",
+        )
+        
+        assert ctx.comment_id == "comment-456"
+        assert ctx.parent_comment_id == "parent-789"
+
+    @pytest.mark.asyncio 
+    async def test_context_threading_fields_default_to_none(self):
+        """Verify threading fields default to None for backwards compatibility."""
+        from src.commands.command import CommandContext
+        
+        ctx = CommandContext(
+            issue_id="issue-123",
+            issue_identifier="ENG-1",
+            args="test",
+            user_id="user-1",
+            user_name="Test User",
+            raw_body="/test",
+            background_tasks=MagicMock(),
+        )
+        
+        assert ctx.comment_id is None
+        assert ctx.parent_comment_id is None
 
 
 class TestWebhookCommandIntegration:

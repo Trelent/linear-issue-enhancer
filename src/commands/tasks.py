@@ -310,16 +310,28 @@ async def answer_question(
     question: str,
     user_name: str,
     model_shorthand: str | None = None,
+    reply_to_id: str | None = None,
 ):
-    """Answer a user's question using context and code research."""
+    """Answer a user's question using context and code research.
+    
+    Args:
+        issue_id: The issue ID
+        question: The user's question
+        user_name: Display name of user who asked
+        model_shorthand: Optional model selection
+        reply_to_id: Optional comment ID to reply to (for threading)
+    """
     print(f"\n{'='*60}", flush=True)
     print(f"❓ Answering question for issue: {issue_id}", flush=True)
     print(f"   Model: {model_shorthand or 'default'}", flush=True)
     print(f"   User: {user_name}", flush=True)
+    if reply_to_id:
+        print(f"   Reply to: {reply_to_id}", flush=True)
     print(f"{'='*60}\n", flush=True)
     
+    # Post "thinking" message as a reply if we have a parent
     try:
-        await add_comment(issue_id, "🤔 _Researching your question..._")
+        await add_comment(issue_id, "🤔 _Researching your question..._", parent_id=reply_to_id)
     except Exception as e:
         if "Entity not found" in str(e) or "not found" in str(e).lower():
             print(f"⚠️ Issue {issue_id} no longer exists, skipping answer", flush=True)
@@ -331,7 +343,7 @@ async def answer_question(
         comments = await get_issue_comments(issue_id)
     except Exception as e:
         print(f"❌ Failed to fetch issue/comments: {e}", flush=True)
-        await add_comment(issue_id, "❌ _Failed to fetch issue data. Please check server logs for details._")
+        await add_comment(issue_id, "❌ _Failed to fetch issue data. Please check server logs for details._", parent_id=reply_to_id)
         return
     
     comment_context = "\n\n".join([
@@ -388,8 +400,8 @@ async def answer_question(
         user_tag = f"@{user_name}" if user_name else ""
         response = f"{user_tag}\n\n{answer}" if user_tag else answer
         
-        print(f"📝 Posting answer...", flush=True)
-        success = await add_comment(issue_id, response)
+        print(f"📝 Posting answer{' (as reply)' if reply_to_id else ''}...", flush=True)
+        success = await add_comment(issue_id, response, parent_id=reply_to_id)
         
         if success:
             print(f"✅ Question answered successfully!", flush=True)
@@ -400,4 +412,4 @@ async def answer_question(
         print(f"❌ Answer failed with error: {e}", flush=True)
         import traceback
         traceback.print_exc()
-        await add_comment(issue_id, "❌ _Failed to answer question. Please check server logs for details._")
+        await add_comment(issue_id, "❌ _Failed to answer question. Please check server logs for details._", parent_id=reply_to_id)
