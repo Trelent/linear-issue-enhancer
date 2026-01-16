@@ -129,25 +129,39 @@ async def add_comment(issue_id: str, body: str, parent_id: str | None = None) ->
         issue_id: The issue ID to comment on
         body: The comment body
         parent_id: Optional parent comment ID to reply to (creates a threaded reply)
+        
+    Note:
+        Linear only allows replies to top-level comments. If parent_id points to
+        a nested reply, this will fall back to posting a top-level comment.
     """
+    # Try threaded reply if parent_id is provided
     if parent_id:
-        mutation = """
-        mutation AddCommentReply($issueId: String!, $body: String!, $parentId: String!) {
-            commentCreate(input: { issueId: $issueId, body: $body, parentId: $parentId }) {
-                success
+        try:
+            mutation = """
+            mutation AddCommentReply($issueId: String!, $body: String!, $parentId: String!) {
+                commentCreate(input: { issueId: $issueId, body: $body, parentId: $parentId }) {
+                    success
+                }
             }
+            """
+            data = await _graphql_async(mutation, {"issueId": issue_id, "body": body, "parentId": parent_id})
+            return data["commentCreate"]["success"]
+        except Exception as e:
+            # Fall back to top-level comment if threading fails (e.g., parent is not top-level)
+            if "incorrect parent" in str(e).lower():
+                print(f"⚠️ Threading failed (parent not top-level), falling back to top-level comment", flush=True)
+            else:
+                raise
+    
+    # Post as top-level comment
+    mutation = """
+    mutation AddComment($issueId: String!, $body: String!) {
+        commentCreate(input: { issueId: $issueId, body: $body }) {
+            success
         }
-        """
-        data = await _graphql_async(mutation, {"issueId": issue_id, "body": body, "parentId": parent_id})
-    else:
-        mutation = """
-        mutation AddComment($issueId: String!, $body: String!) {
-            commentCreate(input: { issueId: $issueId, body: $body }) {
-                success
-            }
-        }
-        """
-        data = await _graphql_async(mutation, {"issueId": issue_id, "body": body})
+    }
+    """
+    data = await _graphql_async(mutation, {"issueId": issue_id, "body": body})
     return data["commentCreate"]["success"]
 
 
