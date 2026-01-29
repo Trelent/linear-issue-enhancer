@@ -1,5 +1,6 @@
 from .ask import AskCommand
-from .retry import RetryCommand
+from .enhance import EnhanceCommand
 from .help import HelpCommand
+from .retry import RetryCommand
 
-__all__ = ["AskCommand", "RetryCommand", "HelpCommand"]
+__all__ = ["AskCommand", "EnhanceCommand", "HelpCommand", "RetryCommand"]

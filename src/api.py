@@ -35,6 +35,10 @@ from src.commands.shared import (
 LINEAR_WEBHOOK_SECRET = os.getenv("LINEAR_WEBHOOK_SECRET")
 SYNC_INTERVAL_HOURS = int(os.getenv("SYNC_INTERVAL_HOURS", "1"))
 
+# Auto-enhance mode: when True (default), new issues are enhanced automatically
+# When False, issues are only enhanced via /enhance command (opt-in mode)
+AUTO_ENHANCE = os.getenv("AUTO_ENHANCE", "true").lower() in ("true", "1", "yes")
+
 # Comma-separated list of Linear project names to exclude from enhancement
 _excluded_projects_raw = os.getenv("LINEAR_EXCLUDED_PROJECTS", "")
 LINEAR_EXCLUDED_PROJECTS = {p.strip().lower() for p in _excluded_projects_raw.split(",") if p.strip()}
@@ -65,6 +69,7 @@ async def scheduled_sync():
 async def lifespan(app: FastAPI):
     """App lifespan handler."""
     print("🚀 Linear Enhancer API starting...", flush=True)
+    print(f"   Auto-enhance: {'enabled' if AUTO_ENHANCE else 'disabled (use /enhance)'}", flush=True)
     print_connector_status()
     if LINEAR_EXCLUDED_PROJECTS:
         print(f"   Excluded projects: {', '.join(sorted(LINEAR_EXCLUDED_PROJECTS))}", flush=True)
@@ -257,6 +262,11 @@ async def _handle_issue_create(data: dict, background_tasks: BackgroundTasks):
     if project_name and project_name.lower() in LINEAR_EXCLUDED_PROJECTS:
         print(f"       → skipped (excluded project: {project_name})", flush=True)
         return {"status": "skipped", "reason": f"Project '{project_name}' is excluded"}
+    
+    # Skip if auto-enhance is disabled (opt-in mode - require /enhance command)
+    if not AUTO_ENHANCE:
+        print(f"       → skipped (auto-enhance disabled, use /enhance)", flush=True)
+        return {"status": "skipped", "reason": "Auto-enhance disabled"}
     
     # Parse model selection from description
     model_shorthand = parse_model_tag(description)
