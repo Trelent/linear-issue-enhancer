@@ -3,7 +3,7 @@
 from fastapi import BackgroundTasks
 
 from src.commands.command import SlashCommand, CommandContext, CommandResult
-from src.commands.handlers import RetryCommand, AskCommand, HelpCommand
+from src.commands.handlers import AskCommand, EnhanceCommand, HelpCommand, RetryCommand
 
 
 def get_all_commands() -> list[SlashCommand]:
@@ -11,6 +11,7 @@ def get_all_commands() -> list[SlashCommand]:
     return [
         HelpCommand(),
         AskCommand(),
+        EnhanceCommand(),
         RetryCommand(),
     ]
 

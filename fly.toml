@@ -11,6 +11,7 @@ primary_region = 'iad'
 [env]
   DOCS_DIR = '/data'
   INTERNAL_DOMAINS = 'trelent.com,trelent.net'
+  AUTO_ENHANCE = 'false'
 
 [[mounts]]
   source = 'linear_data'
