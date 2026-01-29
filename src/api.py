@@ -227,6 +227,11 @@ async def _handle_issue_create(data: dict, background_tasks: BackgroundTasks):
     description = data.get("description") or ""
     desc_len = len(description)
     
+    # Debug logging for skip tag detection
+    print(f"· [WH] Issue/create \"{title[:40]}\" | desc={desc_len} chars", flush=True)
+    if desc_len > 0:
+        print(f"       Description preview: \"{description[:100]}{'...' if desc_len > 100 else ''}\"", flush=True)
+    
     # Extract project/team context
     project = data.get("project", {})
     project_name = project.get("name") if project else None
@@ -235,22 +240,22 @@ async def _handle_issue_create(data: dict, background_tasks: BackgroundTasks):
     
     # Check if we already processed this issue recently (prevents loops)
     if _was_recently_processed(issue_id):
-        print(f"· [WH] Issue/create \"{title[:40]}\" → skipped (recently processed)", flush=True)
+        print(f"       → skipped (recently processed)", flush=True)
         return {"status": "skipped", "reason": "Recently processed"}
     
     # Check if description already has our marker
     if ENHANCEMENT_MARKER in description:
-        print(f"· [WH] Issue/create \"{title[:40]}\" → skipped (already enhanced)", flush=True)
+        print(f"       → skipped (already enhanced)", flush=True)
         return {"status": "skipped", "reason": "Already enhanced"}
     
     # Skip if explicitly tagged to skip
     if "[skip=true]" in description:
-        print(f"· [WH] Issue/create \"{title[:40]}\" → skipped (skip tag)", flush=True)
+        print(f"       → skipped (skip tag detected)", flush=True)
         return {"status": "skipped", "reason": "Skip tag present"}
     
     # Skip if project is in exclusion list
     if project_name and project_name.lower() in LINEAR_EXCLUDED_PROJECTS:
-        print(f"· [WH] Issue/create \"{title[:40]}\" → skipped (excluded project: {project_name})", flush=True)
+        print(f"       → skipped (excluded project: {project_name})", flush=True)
         return {"status": "skipped", "reason": f"Project '{project_name}' is excluded"}
     
     # Parse model selection from description
