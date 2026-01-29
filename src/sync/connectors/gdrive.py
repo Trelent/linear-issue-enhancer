@@ -29,6 +29,19 @@ SCOPES = [
 GDRIVE_RATE_LIMIT = 5
 GDRIVE_CONCURRENT_EXPORTS = 5
 
+# Excluded folder paths (case-insensitive, comma-separated)
+# Can be folder names ("Archive"), paths ("Projects/Archive"), or folder IDs
+# Matches recursively - excludes all docs under matching folders
+_excluded_folders_raw = os.getenv("GDRIVE_EXCLUDED_FOLDERS", "")
+_excluded_folders_parsed = [f.strip() for f in _excluded_folders_raw.split(",") if f.strip()]
+
+# Separate folder IDs from path patterns (IDs are long alphanumeric, no slashes/spaces)
+def _is_folder_id(s: str) -> bool:
+    return len(s) > 20 and "/" not in s and " " not in s and s.replace("-", "").replace("_", "").isalnum()
+
+GDRIVE_EXCLUDED_FOLDER_IDS = {f for f in _excluded_folders_parsed if _is_folder_id(f)}
+GDRIVE_EXCLUDED_FOLDERS = [f.lower() for f in _excluded_folders_parsed if not _is_folder_id(f)]
+
 
 class GDriveConnector(Connector):
     """Syncs Google Drive docs and sheets to markdown files."""
@@ -79,10 +92,33 @@ class GDriveConnector(Connector):
                 return state, ConnectorResult(success=False, message="No credentials")
         
         rate_limiter = RateLimiter(GDRIVE_RATE_LIMIT)
-        
         drive_service = build("drive", "v3", credentials=self._creds)
+        
+        # Build folder cache if we have exclusions
+        folder_cache: dict[str, dict] = {}
+        has_exclusions = GDRIVE_EXCLUDED_FOLDERS or GDRIVE_EXCLUDED_FOLDER_IDS
+        if has_exclusions:
+            exclusion_strs = list(GDRIVE_EXCLUDED_FOLDERS) + [f"id:{fid[:12]}..." for fid in GDRIVE_EXCLUDED_FOLDER_IDS]
+            print(f"  🚫 GDrive: Excluding folders: {', '.join(exclusion_strs)}")
+            folder_cache = await _build_folder_cache(drive_service, rate_limiter)
+        
         docs = await _list_all_docs(drive_service, rate_limiter)
         print(f"  📄 GDrive: Found {len(docs)} documents")
+        
+        # Filter out docs in excluded folders and handle retroactive deletion
+        excluded_count = 0
+        if has_exclusions:
+            filtered_docs = []
+            for doc in docs:
+                if _is_in_excluded_folder(doc, folder_cache):
+                    excluded_count += 1
+                    # Retroactive deletion: remove .md file if it exists
+                    _delete_doc_md_file(doc, state, output_dir)
+                    continue
+                filtered_docs.append(doc)
+            docs = filtered_docs
+            if excluded_count > 0:
+                print(f"     Excluded {excluded_count} docs in excluded folders")
         
         docs_to_sync = []
         new_state = {}
@@ -285,32 +321,225 @@ async def _list_all_docs(service, rate_limiter: RateLimiter) -> list:
 
 
 def _list_docs_in_drive_sync(service, drive_id: str | None) -> list:
-    """List Google Docs and Sheets in a specific drive."""
+    """List Google Docs and Sheets in a specific drive (with pagination)."""
     query = "(mimeType='application/vnd.google-apps.document' or mimeType='application/vnd.google-apps.spreadsheet')"
+    fields = "nextPageToken, files(id, name, mimeType, modifiedTime, owners, parents)"
+    all_docs = []
+    page_token = None
     
     try:
-        if drive_id:
-            results = service.files().list(
-                q=query,
-                driveId=drive_id,
-                corpora="drive",
-                supportsAllDrives=True,
-                includeItemsFromAllDrives=True,
-                fields="files(id, name, mimeType, modifiedTime, owners)",
-                pageSize=100,
-            ).execute()
-        else:
-            results = service.files().list(
-                q=query,
-                supportsAllDrives=True,
-                includeItemsFromAllDrives=True,
-                fields="files(id, name, mimeType, modifiedTime, owners)",
-                pageSize=100,
-            ).execute()
-        return results.get("files", [])
+        while True:
+            if drive_id:
+                params = {
+                    "q": query,
+                    "driveId": drive_id,
+                    "corpora": "drive",
+                    "supportsAllDrives": True,
+                    "includeItemsFromAllDrives": True,
+                    "fields": fields,
+                    "pageSize": 100,
+                }
+            else:
+                params = {
+                    "q": query,
+                    "supportsAllDrives": True,
+                    "includeItemsFromAllDrives": True,
+                    "fields": fields,
+                    "pageSize": 100,
+                }
+            
+            if page_token:
+                params["pageToken"] = page_token
+            
+            results = service.files().list(**params).execute()
+            all_docs.extend(results.get("files", []))
+            
+            page_token = results.get("nextPageToken")
+            if not page_token:
+                break
+        
+        return all_docs
     except HttpError as e:
         print(f"  ✗ GDrive API error listing files: {e}")
+        return all_docs
+
+
+async def _build_folder_cache(service, rate_limiter: RateLimiter) -> dict[str, dict]:
+    """Build a cache mapping folder IDs to {name, parents} for path resolution."""
+    folder_cache = {}
+    
+    async def fetch_all_folders(query_params: dict) -> list:
+        """Fetch all folders with pagination."""
+        all_folders = []
+        page_token = None
+        
+        while True:
+            await rate_limiter.acquire()
+            params = {**query_params, "pageSize": 500}
+            if page_token:
+                params["pageToken"] = page_token
+            
+            results = await _run_in_executor(
+                lambda p=params: service.files().list(**p).execute()
+            )
+            all_folders.extend(results.get("files", []))
+            
+            page_token = results.get("nextPageToken")
+            if not page_token:
+                break
+        
+        return all_folders
+    
+    try:
+        # Get all folders in My Drive (with pagination)
+        my_drive_folders = await fetch_all_folders({
+            "q": "mimeType='application/vnd.google-apps.folder'",
+            "supportsAllDrives": True,
+            "includeItemsFromAllDrives": True,
+            "fields": "nextPageToken, files(id, name, parents)",
+        })
+        
+        for folder in my_drive_folders:
+            folder_cache[folder["id"]] = {
+                "name": folder["name"],
+                "parents": folder.get("parents", []),
+            }
+        
+        # Also get folders from shared drives
+        await rate_limiter.acquire()
+        drives = await _run_in_executor(
+            lambda: service.drives().list(pageSize=50).execute()
+        )
+        
+        for drive in drives.get("drives", []):
+            drive_folders = await fetch_all_folders({
+                "q": "mimeType='application/vnd.google-apps.folder'",
+                "driveId": drive["id"],
+                "corpora": "drive",
+                "supportsAllDrives": True,
+                "includeItemsFromAllDrives": True,
+                "fields": "nextPageToken, files(id, name, parents)",
+            })
+            for folder in drive_folders:
+                folder_cache[folder["id"]] = {
+                    "name": folder["name"],
+                    "parents": folder.get("parents", []),
+                }
+        
+        print(f"     Folder cache: {len(folder_cache)} folders indexed")
+    except HttpError as e:
+        print(f"  ⚠ GDrive: Error building folder cache: {e}")
+    
+    return folder_cache
+
+
+def _resolve_folder_path(folder_id: str, folder_cache: dict[str, dict], seen: set | None = None) -> str:
+    """Resolve full folder path from folder ID (e.g., 'Projects/Archive/2024')."""
+    if seen is None:
+        seen = set()
+    
+    if folder_id in seen:
+        return ""  # Prevent infinite loops
+    seen.add(folder_id)
+    
+    folder_info = folder_cache.get(folder_id)
+    if not folder_info:
+        return ""
+    
+    folder_name = folder_info["name"]
+    parents = folder_info.get("parents", [])
+    
+    if not parents:
+        return folder_name
+    
+    # Recursively resolve parent path
+    parent_path = _resolve_folder_path(parents[0], folder_cache, seen)
+    if parent_path:
+        return f"{parent_path}/{folder_name}"
+    return folder_name
+
+
+def _get_folder_ancestry(folder_id: str, folder_cache: dict[str, dict], seen: set | None = None) -> list[str]:
+    """Get list of all folder IDs in the ancestry chain (including self)."""
+    if seen is None:
+        seen = set()
+    
+    if folder_id in seen or folder_id not in folder_cache:
         return []
+    seen.add(folder_id)
+    
+    result = [folder_id]
+    parents = folder_cache[folder_id].get("parents", [])
+    if parents:
+        result.extend(_get_folder_ancestry(parents[0], folder_cache, seen))
+    return result
+
+
+def _is_in_excluded_folder(doc: dict, folder_cache: dict[str, dict]) -> bool:
+    """Check if a document is in an excluded folder (matches path or ID recursively)."""
+    if not GDRIVE_EXCLUDED_FOLDERS and not GDRIVE_EXCLUDED_FOLDER_IDS:
+        return False
+    
+    parents = doc.get("parents", [])
+    if not parents:
+        return False
+    
+    parent_id = parents[0]
+    
+    # Check folder IDs first (faster, exact match)
+    if GDRIVE_EXCLUDED_FOLDER_IDS:
+        ancestry = _get_folder_ancestry(parent_id, folder_cache)
+        for folder_id in ancestry:
+            if folder_id in GDRIVE_EXCLUDED_FOLDER_IDS:
+                return True
+    
+    # Check path patterns
+    if not GDRIVE_EXCLUDED_FOLDERS:
+        return False
+    
+    folder_path = _resolve_folder_path(parent_id, folder_cache)
+    if not folder_path:
+        return False
+    
+    folder_path_lower = folder_path.lower()
+    
+    # Check if any excluded folder matches as a path segment
+    for excluded in GDRIVE_EXCLUDED_FOLDERS:
+        # Match as full path segment: "Archive" matches "Projects/Archive" or "Archive/subfolder"
+        # but not "MyArchive" or "Archives"
+        if excluded == folder_path_lower:
+            return True
+        if folder_path_lower.startswith(excluded + "/"):
+            return True
+        if ("/" + excluded) in folder_path_lower:
+            # Check it's a full segment match, not partial
+            idx = folder_path_lower.find("/" + excluded)
+            rest = folder_path_lower[idx + len(excluded) + 1:]
+            if rest == "" or rest.startswith("/"):
+                return True
+    
+    return False
+
+
+def _delete_doc_md_file(doc: dict, state: dict, output_dir: Path):
+    """Delete the .md file for a document if it exists (retroactive exclusion)."""
+    doc_id = doc["id"]
+    doc_name = doc["name"]
+    
+    # Try to find and delete the file
+    # First check state for the stored name
+    stored_name = state.get(doc_id, {}).get("name")
+    names_to_try = [stored_name, doc_name] if stored_name else [doc_name]
+    
+    for name in names_to_try:
+        if not name:
+            continue
+        safe_name = "".join(c if c.isalnum() or c in " -_" else "_" for c in name)
+        md_path = output_dir / f"{safe_name}.md"
+        if md_path.exists():
+            md_path.unlink()
+            print(f"     [deleted] {name} (now in excluded folder)")
+            return
 
 
 def _format_sheet_as_markdown(sheet_name: str, values: list, formulas: list) -> str:
